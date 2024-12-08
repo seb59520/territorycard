@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+
+{% block title %}Accueil{% endblock %}
+
+{% block extra_css %}
+<style>
+    #map {
+        height: 600px;
+        width: 100%;
+        margin-bottom: 20px;
+    }
+    .territory-card {
+        margin-bottom: 15px;
+    }
+    .qr-code {
+        max-width: 150px;
+    }
+    .drawing-controls {
+        margin-bottom: 15px;
+    }
+    #notification {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 15px;
+        border-radius: 5px;
+        display: none;
+        z-index: 1000;
+    }
+    .notification-success {
+        background-color: #d4edda;
+        border-color: #c3e6cb;
+        color: #155724;
+    }
+    .notification-error {
+        background-color: #f8d7da;
+        border-color: #f5c6cb;
+        color: #721c24;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="notification"></div>
+<div class="container">
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h5 class="card-title">Charger un fichier KML</h5>
+                    <form id="kmlForm" class="mb-3">
+                        <div class="mb-3">
+                            <input type="file" class="form-control" id="kmlFile" accept=".kml">
+                        </div>
+                        <button type="submit" class="btn btn-primary">Charger</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h5 class="card-title">Outils de dessin</h5>
+                    <div class="drawing-controls">
+                        <div class="btn-group" role="group">
+                            <button type="button" class="btn btn-outline-primary" onclick="setDrawingMode('polygon')">
+                                <i class="fas fa-draw-polygon"></i> Polygone
+                            </button>
+                            <button type="button" class="btn btn-outline-primary" onclick="setDrawingMode('rectangle')">
+                                <i class="fas fa-square"></i> Rectangle
+                            </button>
+                            <button type="button" class="btn btn-outline-primary" onclick="setDrawingMode('line')">
+                                <i class="fas fa-minus"></i> Ligne
+                            </button>
+                            <button type="button" class="btn btn-outline-primary" onclick="setDrawingMode(null)">
+                                <i class="fas fa-mouse-pointer"></i> Sélection
+                            </button>
+                        </div>
+                        <button type="button" class="btn btn-danger ms-2" onclick="clearDrawings()">
+                            <i class="fas fa-trash"></i> Effacer
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="map"></div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Territoires générés</h5>
+                    <div id="territoriesList"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let map;
+let drawingManager;
+let shapes = [];
+
+function initMap() {
+    const defaultCenter = { 
+        lat: {{ default_center.lat }}, 
+        lng: {{ default_center.lng }}
+    };
+    const defaultZoom = 15;
+
+    map = new google.maps.Map(document.getElementById('map'), {
+        center: defaultCenter,
+        zoom: defaultZoom,
+        mapTypeId: 'satellite'
+    });
+    
+    drawingManager = new google.maps.drawing.DrawingManager({
+        drawingMode: null,
+        drawingControl: true,
+        drawingControlOptions: {
+            position: google.maps.ControlPosition.TOP_CENTER,
+            drawingModes: [
+                google.maps.drawing.OverlayType.POLYGON,
+                google.maps.drawing.OverlayType.RECTANGLE
+            ]
+        }
+    });
+    drawingManager.setMap(map);
+    
+    google.maps.event.addListener(drawingManager, 'overlaycomplete', function(event) {
+        const shape = event.overlay;
+        shapes.push(shape);
+        
+        let coordinates = [];
+        if (event.type === google.maps.drawing.OverlayType.POLYGON) {
+            const vertices = shape.getPath();
+            for (let i = 0; i < vertices.getLength(); i++) {
+                const xy = vertices.getAt(i);
+                coordinates.push([xy.lng(), xy.lat()]);
+            }
+            // Close the polygon by adding the first point again
+            if (coordinates.length > 0) {
+                coordinates.push([...coordinates[0]]);
+            }
+        } else if (event.type === google.maps.drawing.OverlayType.RECTANGLE) {
+            const bounds = shape.getBounds();
+            const ne = bounds.getNorthEast();
+            const sw = bounds.getSouthWest();
+            coordinates = [
+                [ne.lng(), ne.lat()],
+                [sw.lng(), ne.lat()],
+                [sw.lng(), sw.lat()],
+                [ne.lng(), sw.lat()],
+                [ne.lng(), ne.lat()] // Close the polygon
+            ];
+        }
+        
+        if (coordinates.length > 0) {
+            generateTerritories(coordinates);
+        }
+    });
+}
+
+function setDrawingMode(mode) {
+    if (!drawingManager) return;
+    
+    if (mode === null) {
+        drawingManager.setDrawingMode(null);
+    } else if (mode === 'polygon') {
+        drawingManager.setDrawingMode(google.maps.drawing.OverlayType.POLYGON);
+    } else if (mode === 'rectangle') {
+        drawingManager.setDrawingMode(google.maps.drawing.OverlayType.RECTANGLE);
+    } else if (mode === 'line') {
+        drawingManager.setDrawingMode(google.maps.drawing.OverlayType.POLYLINE);
+    }
+}
+
+function clearDrawings() {
+    shapes.forEach(shape => shape.setMap(null));
+    shapes = [];
+}
+
+function showNotification(message, type) {
+    const notification = document.getElementById('notification');
+    notification.textContent = message;
+    notification.className = type === 'success' ? 'notification-success' : 'notification-error';
+    notification.style.display = 'block';
+    setTimeout(() => {
+        notification.style.display = 'none';
+    }, 5000);
+}
+
+function generateTerritories(coordinates) {
+    showNotification('Création du territoire en cours...', 'success');
+    console.log('Envoi des coordonnées:', coordinates);
+    fetch('/generate_territories', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({coordinates: coordinates})
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        console.log('Réponse reçue du serveur');
+        return response.json();
+    })
+    .then(data => {
+        console.log('Données reçues:', data);
+        if (data.error) {
+            console.error('Error:', data.error);
+            showNotification('Erreur : ' + data.error, 'error');
+        } else {
+            console.log('Success:', data);
+            showNotification('Territoire créé avec succès !', 'success');
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showNotification('Une erreur est survenue lors de la génération du territoire : ' + error.message, 'error');
+    });
+}
+</script>
+<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=drawing&callback=initMap" async defer></script>
+{% endblock %}

@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+
+{% block title %}{{ territory.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    #map {
+        height: 600px;
+        width: 100%;
+        margin-bottom: 20px;
+    }
+    .territory-info {
+        margin-bottom: 20px;
+    }
+    .drawing-controls {
+        margin-bottom: 10px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row">
+        <div class="col-md-8">
+            <h2 class="mb-4">{{ territory.name }}</h2>
+            <div class="drawing-controls">
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-outline-primary" onclick="setDrawingMode('polygon')">
+                        <i class="fas fa-draw-polygon"></i> Polygone
+                    </button>
+                    <button type="button" class="btn btn-outline-primary" onclick="setDrawingMode('rectangle')">
+                        <i class="fas fa-square"></i> Rectangle
+                    </button>
+                    <button type="button" class="btn btn-outline-primary" onclick="setDrawingMode('line')">
+                        <i class="fas fa-minus"></i> Ligne
+                    </button>
+                    <button type="button" class="btn btn-outline-primary" onclick="setDrawingMode(null)">
+                        <i class="fas fa-mouse-pointer"></i> Sélection
+                    </button>
+                </div>
+                <button type="button" class="btn btn-danger ms-2" onclick="clearDrawings()">
+                    <i class="fas fa-trash"></i> Effacer
+                </button>
+            </div>
+            <div id="map"></div>
+        </div>
+        <div class="col-md-4">
+            <div class="card territory-info">
+                <div class="card-body">
+                    <h5 class="card-title">Informations</h5>
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item">
+                            <strong>Ville :</strong> {{ territory.city }}
+                        </li>
+                        <li class="list-group-item">
+                            <strong>Bâtiments :</strong> 
+                            {{ territory.building_stats.building_count }}
+                        </li>
+                        <li class="list-group-item">
+                            <strong>Appartements :</strong> 
+                            {{ territory.building_stats.apartment_count }}
+                        </li>
+                        <li class="list-group-item">
+                            <strong>Total sonnettes :</strong> 
+                            {{ territory.building_stats.building_count + territory.building_stats.apartment_count }}
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let map;
+let drawingManager;
+let shapes = [];
+
+function initMap() {
+    const territory = {{ territory.polygon_data | tojson | safe }};
+    
+    // Calculer le centre approximatif du polygone
+    const coordinates = territory.geometry.coordinates[0];
+    let lat = 0, lng = 0;
+    coordinates.forEach(coord => {
+        lat += coord[1];
+        lng += coord[0];
+    });
+    lat /= coordinates.length;
+    lng /= coordinates.length;
+    
+    map = new google.maps.Map(document.getElementById('map'), {
+        zoom: 16,
+        center: { lat: lat, lng: lng },
+        mapTypeId: 'satellite'
+    });
+    
+    // Créer le polygone du territoire
+    const territoryPolygon = new google.maps.Polygon({
+        paths: coordinates.map(coord => ({ lat: coord[1], lng: coord[0] })),
+        strokeColor: '#FF0000',
+        strokeOpacity: 0.8,
+        strokeWeight: 2,
+        fillColor: '#FF0000',
+        fillOpacity: 0.35,
+        editable: false
+    });
+    
+    territoryPolygon.setMap(map);
+    
+    // Initialiser le gestionnaire de dessin
+    drawingManager = new google.maps.drawing.DrawingManager({
+        drawingMode: null,
+        drawingControl: false,
+        drawingControlOptions: {
+            position: google.maps.ControlPosition.TOP_CENTER,
+            drawingModes: [
+                google.maps.drawing.OverlayType.POLYGON,
+                google.maps.drawing.OverlayType.RECTANGLE,
+                google.maps.drawing.OverlayType.POLYLINE
+            ]
+        },
+        polygonOptions: {
+            strokeColor: '#0000FF',
+            strokeOpacity: 0.8,
+            strokeWeight: 2,
+            fillColor: '#0000FF',
+            fillOpacity: 0.35,
+            editable: true
+        },
+        rectangleOptions: {
+            strokeColor: '#0000FF',
+            strokeOpacity: 0.8,
+            strokeWeight: 2,
+            fillColor: '#0000FF',
+            fillOpacity: 0.35,
+            editable: true
+        },
+        polylineOptions: {
+            strokeColor: '#0000FF',
+            strokeOpacity: 0.8,
+            strokeWeight: 3,
+            editable: true
+        }
+    });
+    
+    drawingManager.setMap(map);
+    
+    // Gérer les nouveaux dessins
+    google.maps.event.addListener(drawingManager, 'overlaycomplete', function(event) {
+        const shape = event.overlay;
+        shapes.push(shape);
+        
+        // Ajouter des écouteurs d'événements pour la modification
+        if (event.type === 'polygon' || event.type === 'rectangle') {
+            google.maps.event.addListener(shape, 'click', function() {
+                shape.setEditable(true);
+            });
+        }
+    });
+}
+
+function setDrawingMode(mode) {
+    const modeMap = {
+        'polygon': google.maps.drawing.OverlayType.POLYGON,
+        'rectangle': google.maps.drawing.OverlayType.RECTANGLE,
+        'line': google.maps.drawing.OverlayType.POLYLINE,
+        null: null
+    };
+    
+    drawingManager.setDrawingMode(modeMap[mode]);
+    
+    // Désactiver l'édition pour toutes les formes
+    shapes.forEach(shape => shape.setEditable(false));
+}
+
+function clearDrawings() {
+    shapes.forEach(shape => shape.setMap(null));
+    shapes = [];
+}
+</script>
+<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=drawing&callback=initMap" async defer></script>
+{% endblock %}

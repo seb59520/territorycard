@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="row">
+        <div class="col-md-8 offset-md-2">
+            <div class="card">
+                <div class="card-header">
+                    <h4 class="mb-0">Paramètres</h4>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="{{ url_for('settings') }}">
+                        {{ form.hidden_tag() }}
+                        
+                        <h5 class="mb-3">Format des territoires</h5>
+                        <div class="mb-3">
+                            <label for="territory_number_format" class="form-label">Format du numéro</label>
+                            {{ form.territory_number_format(class="form-control") }}
+                            <small class="text-muted">{{ form.territory_number_format.description }}</small>
+                            {% for error in form.territory_number_format.errors %}
+                            <span class="text-danger">{{ error }}</span>
+                            {% endfor %}
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="territory_start_number" class="form-label">Numéro de départ</label>
+                            {{ form.territory_start_number(class="form-control") }}
+                            {% for error in form.territory_start_number.errors %}
+                            <span class="text-danger">{{ error }}</span>
+                            {% endfor %}
+                        </div>
+                        
+                        <h5 class="mb-3 mt-4">Affichage des immeubles</h5>
+                        <div class="mb-3 form-check">
+                            {{ form.show_large_buildings(class="form-check-input") }}
+                            <label class="form-check-label" for="show_large_buildings">
+                                Afficher les grands immeubles
+                            </label>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="large_building_threshold" class="form-label">
+                                Seuil pour grands immeubles (nombre de sonnettes)
+                            </label>
+                            {{ form.large_building_threshold(class="form-control") }}
+                            {% for error in form.large_building_threshold.errors %}
+                            <span class="text-danger">{{ error }}</span>
+                            {% endfor %}
+                        </div>
+                        
+                        <h5 class="mb-3 mt-4">Paramètres de carte</h5>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="default_map_center_lat" class="form-label">Latitude par défaut</label>
+                                    {{ form.default_map_center_lat(class="form-control") }}
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="default_map_center_lng" class="form-label">Longitude par défaut</label>
+                                    {{ form.default_map_center_lng(class="form-control") }}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="default_map_zoom" class="form-label">Zoom par défaut</label>
+                            {{ form.default_map_zoom(class="form-control") }}
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary">Enregistrer les paramètres</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
