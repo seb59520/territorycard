@@ -4,7 +4,7 @@ import requests
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_migrate import Migrate
-from werkzeug.urls import url_parse
+from urllib.parse import urlparse
 from datetime import datetime
 import qrcode
 from models import db, User, Territory, UserSettings
@@ -46,7 +46,7 @@ def login():
             return redirect(url_for('login'))
         login_user(user, remember=form.remember_me.data)
         next_page = request.args.get('next')
-        if not next_page or url_parse(next_page).netloc != '':
+        if not next_page or urlparse(next_page).netloc != '':
             next_page = url_for('index')
         return redirect(next_page)
     return render_template('login.html', title='Se connecter', form=form)
