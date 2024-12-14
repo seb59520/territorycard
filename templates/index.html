@@ -86,10 +86,25 @@
         </div>
 
         <div class="col-md-4">
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">Territoires générés</h5>
-                    <div id="territoriesList"></div>
+            <div class="container mt-4">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <h2>Mes Territoires</h2>
+                    <div>
+                        <form action="{{ url_for('recalculate_all_territories') }}" method="POST" class="d-inline">
+                            <button type="submit" class="btn btn-primary me-2">
+                                <i class="fas fa-sync"></i> Recalculer toutes les statistiques
+                            </button>
+                        </form>
+                        <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#uploadModal">
+                            <i class="fas fa-upload"></i> Importer KML
+                        </button>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Territoires générés</h5>
+                        <div id="territoriesList"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -99,6 +114,53 @@
 
 {% block extra_js %}
 <script>
+document.getElementById('kmlForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const fileInput = document.getElementById('kmlFile');
+    const file = fileInput.files[0];
+    
+    if (!file) {
+        showNotification('Veuillez sélectionner un fichier KML', 'error');
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+        showNotification('Upload du fichier en cours...', 'info');
+        
+        const response = await fetch('/upload-kml', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showNotification(data.message, 'success');
+            // Générer les territoires automatiquement après l'upload
+            const genResponse = await fetch('/generate_territories', {
+                method: 'POST'
+            });
+            
+            const genData = await genResponse.json();
+            
+            if (genResponse.ok) {
+                showNotification(genData.message, 'success');
+            } else {
+                showNotification('Erreur lors de la génération des territoires: ' + genData.message, 'error');
+            }
+        } else {
+            showNotification('Erreur: ' + data.error, 'error');
+        }
+    } catch (error) {
+        console.error('Erreur:', error);
+        showNotification('Erreur lors de l\'upload du fichier', 'error');
+    }
+});
+
 let map;
 let drawingManager;
 let shapes = [];

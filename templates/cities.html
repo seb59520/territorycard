@@ -3,181 +3,148 @@
 {% block title %}Liste des Villes{% endblock %}
 
 {% block content %}
-<div class="container mt-5">
-    <h2>Liste des villes</h2>
+<div class="container">
+    <h1 class="mb-4">Liste des Villes</h1>
     
-    <div class="mb-3">
-        <button id="deleteSelected" class="btn btn-danger" style="display: none;">
-            Supprimer les territoires sélectionnés
-        </button>
-    </div>
-
-    <div class="row">
-        {% for city, data in cities.items() %}
-        <div class="col-md-6 mb-4">
-            <div class="card">
-                <div class="card-header">
-                    <h3>{{ city }}</h3>
-                    <p class="mb-0">{{ data.count }} territoire{% if data.count > 1 %}s{% endif %}</p>
-                </div>
-                <div class="card-body">
-                    <div class="list-group">
-                        {% for territory in data.territories %}
-                        <div class="list-group-item">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <div class="form-check">
-                                    <input type="checkbox" class="form-check-input territory-checkbox" 
-                                           data-territory-id="{{ territory.id }}">
-                                    <label class="form-check-label territory-name" 
-                                           data-territory-id="{{ territory.id }}">
-                                        {{ territory.name }}
-                                    </label>
-                                </div>
-                                <div class="btn-group">
-                                    <button class="btn btn-sm btn-outline-primary edit-name" 
-                                            data-territory-id="{{ territory.id }}">
-                                        <i class="fas fa-edit"></i>
-                                    </button>
-                                    <a href="{{ url_for('print_territories_by_city', city=city) }}" 
-                                       class="btn btn-sm btn-outline-secondary">
-                                        <i class="fas fa-print"></i>
-                                    </a>
-                                </div>
-                            </div>
-                            <div class="mt-2">
-                                <small class="text-muted">
-                                    {% if territory.stats %}
-                                        {{ territory.stats.houses }} maisons,
-                                        {{ territory.stats.apartments }} appartements
-                                    {% endif %}
-                                </small>
-                            </div>
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-            </div>
-        </div>
-        {% endfor %}
+    <div class="row" id="cities-container">
+        <!-- Les cartes des villes seront ajoutées ici -->
     </div>
 </div>
 
-<!-- Modal pour renommer un territoire -->
-<div class="modal fade" id="renameModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">Renommer le territoire</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <input type="text" class="form-control" id="newName">
-                <input type="hidden" id="territoryId">
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
-                <button type="button" class="btn btn-primary" id="saveNewName">Enregistrer</button>
-            </div>
-        </div>
-    </div>
-</div>
+<style>
+.city-card {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    background: white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
 
-{% endblock %}
+.city-name {
+    font-size: 1.2rem;
+    font-weight: bold;
+    margin-bottom: 15px;
+    color: #333;
+}
 
-{% block scripts %}
+.territory-badge {
+    background: #007bff;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 15px;
+    font-size: 0.9rem;
+}
+
+.stats-box {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 6px;
+    margin: 15px 0;
+}
+
+.stats-number {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #28a745;
+}
+
+.progress {
+    height: 25px;
+    margin: 15px 0;
+}
+
+.progress-bar {
+    line-height: 25px;
+    font-weight: bold;
+}
+
+.btn-print {
+    width: 100%;
+    margin-top: 10px;
+}
+
+.no-data {
+    color: #6c757d;
+    font-style: italic;
+    padding: 10px;
+    text-align: center;
+    background: #f8f9fa;
+    border-radius: 6px;
+}
+</style>
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const renameModal = new bootstrap.Modal(document.getElementById('renameModal'));
-    const checkboxes = document.querySelectorAll('.territory-checkbox');
-    const deleteButton = document.getElementById('deleteSelected');
+    const container = document.getElementById('cities-container');
     
-    // Gérer l'affichage du bouton de suppression
-    function updateDeleteButton() {
-        const checkedBoxes = document.querySelectorAll('.territory-checkbox:checked');
-        deleteButton.style.display = checkedBoxes.length > 0 ? 'block' : 'none';
-    }
-    
-    checkboxes.forEach(checkbox => {
-        checkbox.addEventListener('change', updateDeleteButton);
-    });
-    
-    // Gérer la suppression multiple
-    deleteButton.addEventListener('click', async function() {
-        if (!confirm('Êtes-vous sûr de vouloir supprimer les territoires sélectionnés ?')) {
-            return;
-        }
-        
-        const selectedTerritories = Array.from(document.querySelectorAll('.territory-checkbox:checked'))
-            .map(cb => cb.dataset.territoryId);
-            
-        try {
-            const response = await fetch('/territories/delete', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    territories: selectedTerritories
-                })
-            });
-            
-            if (response.ok) {
-                // Recharger la page après la suppression
-                window.location.reload();
+    fetch('/territories/cities')
+        .then(response => response.json())
+        .then(data => {
+            if (data.cities && data.cities.length > 0) {
+                container.innerHTML = data.cities.map(city => `
+                    <div class="col-md-6 col-lg-4">
+                        <div class="city-card">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div class="city-name">
+                                    <i class="fas fa-map-marker-alt text-danger"></i>
+                                    ${city.name === "Ville inconnue" ? 
+                                        '<span class="text-muted">Ville inconnue</span>' : 
+                                        city.name}
+                                </div>
+                                <span class="territory-badge">
+                                    ${city.stats.territories} territoire${city.stats.territories !== 1 ? 's' : ''}
+                                </span>
+                            </div>
+                            
+                            ${city.stats.houses > 0 ? `
+                                <div class="stats-box">
+                                    <div class="d-flex justify-content-between">
+                                        <span>Maisons</span>
+                                        <span class="stats-number">${city.stats.houses}</span>
+                                    </div>
+                                    <div class="progress">
+                                        <div class="progress-bar bg-success" 
+                                             role="progressbar" 
+                                             style="width: 100%" 
+                                             aria-valuenow="100">
+                                            ${city.stats.houses} maisons
+                                        </div>
+                                    </div>
+                                </div>
+                            ` : `
+                                <div class="no-data">
+                                    <i class="fas fa-info-circle"></i>
+                                    Pas de données de bâtiments
+                                </div>
+                            `}
+                            
+                            <button onclick="window.location.href='/print/${encodeURIComponent(city.name)}'" 
+                                    class="btn btn-outline-primary btn-print">
+                                <i class="fas fa-print"></i> 
+                                Imprimer
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
             } else {
-                const data = await response.json();
-                alert('Erreur lors de la suppression : ' + (data.error || 'Erreur inconnue'));
+                container.innerHTML = `
+                    <div class="col-12">
+                        <div class="alert alert-info text-center">
+                            Aucune ville trouvée
+                        </div>
+                    </div>`;
             }
-        } catch (error) {
-            alert('Erreur lors de la suppression : ' + error);
-        }
-    });
-    
-    // Gérer le renommage
-    document.querySelectorAll('.edit-name').forEach(button => {
-        button.addEventListener('click', function() {
-            const territoryId = this.dataset.territoryId;
-            const nameLabel = document.querySelector(`.territory-name[data-territory-id="${territoryId}"]`);
-            const currentName = nameLabel.textContent.trim();
-            
-            document.getElementById('newName').value = currentName;
-            document.getElementById('territoryId').value = territoryId;
-            renameModal.show();
+        })
+        .catch(error => {
+            console.error('Erreur:', error);
+            container.innerHTML = `
+                <div class="col-12">
+                    <div class="alert alert-danger text-center">
+                        Une erreur est survenue lors du chargement des données
+                    </div>
+                </div>`;
         });
-    });
-    
-    document.getElementById('saveNewName').addEventListener('click', async function() {
-        const territoryId = document.getElementById('territoryId').value;
-        const newName = document.getElementById('newName').value.trim();
-        
-        if (!newName) {
-            alert('Le nom ne peut pas être vide');
-            return;
-        }
-        
-        try {
-            const response = await fetch(`/territory/${territoryId}/rename`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    name: newName
-                })
-            });
-            
-            if (response.ok) {
-                const nameLabel = document.querySelector(`.territory-name[data-territory-id="${territoryId}"]`);
-                nameLabel.textContent = newName;
-                renameModal.hide();
-            } else {
-                const data = await response.json();
-                alert('Erreur lors du renommage : ' + (data.error || 'Erreur inconnue'));
-            }
-        } catch (error) {
-            alert('Erreur lors du renommage : ' + error);
-        }
-    });
 });
 </script>
 {% endblock %}

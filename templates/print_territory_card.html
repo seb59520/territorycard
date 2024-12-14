@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+
+{% block title %}Carte de territoire - {{ territory.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    @media print {
+        .no-print {
+            display: none !important;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+        }
+        .territory-card {
+            position: relative;
+            width: 210mm;
+            height: 297mm;
+            margin: 0;
+            padding: 0;
+            background-image: url("{{ url_for('static', filename='images/carte_territoire_template.jpg') }}");
+            background-size: cover;
+            background-repeat: no-repeat;
+            background-position: center;
+            page-break-after: always;
+        }
+    }
+    
+    /* Styles pour l'aperçu à l'écran */
+    .territory-card {
+        position: relative;
+        width: 210mm;
+        height: 297mm;
+        margin: 20px auto;
+        padding: 0;
+        background-image: url("{{ url_for('static', filename='images/carte_territoire_template.jpg') }}");
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-position: center;
+        box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+    
+    .territory-info {
+        position: absolute;
+        top: 15mm;
+        left: 75mm;
+        font-size: 14pt;
+        font-family: Times, serif;
+    }
+    
+    #territory-map {
+        position: absolute;
+        top: 30mm;
+        left: 25mm;
+        width: 110mm;
+        height: 80mm;
+        border: 1px solid #ccc;
+        background: white;
+        z-index: 10;
+    }
+    
+    .qr-code {
+        position: absolute;
+        top: 50mm;
+        left: 145mm;
+        width: 30mm;
+        height: 30mm;
+        z-index: 10;
+    }
+    
+    .qr-code img {
+        width: 100%;
+        height: 100%;
+        display: block;
+    }
+    
+    .territory-details {
+        position: absolute;
+        top: 85mm;
+        left: 145mm;
+        font-size: 12pt;
+        font-family: Times, serif;
+        color: #333;
+        line-height: 1.2;
+        z-index: 10;
+    }
+    
+    .territory-details p {
+        margin: 0 0 4mm 0;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 no-print">
+        <h2>Carte de territoire - {{ territory.name }}</h2>
+        <button class="btn btn-primary" onclick="window.print()">
+            <i class="fas fa-print"></i> Imprimer
+        </button>
+    </div>
+
+    <div class="territory-card">
+        <div class="territory-info">
+            <div class="lieu">{{ territory.name }}</div>
+        </div>
+        <div id="territory-map"></div>
+        <div class="qr-code">
+            <img src="{{ qr_code_url }}" alt="QR Code">
+        </div>
+        <div class="territory-details">
+            <p>À titre indicatif :</p>
+            <p>Nombre de sonnettes : {{ territory.donnettes_count if territory.donnettes_count else 'Non spécifié' }}</p>
+            <p>Rues concernées : {{ territory.streets if territory.streets else 'Non spécifié' }}</p>
+        </div>
+    </div>
+</div>
+
+<script>
+function initMap() {
+    const mapElement = document.getElementById('territory-map');
+    if (!mapElement) {
+        console.error('Map element not found');
+        return;
+    }
+
+    try {
+        // Configuration de base de la carte
+        const mapOptions = {
+            zoom: 16,
+            mapTypeId: google.maps.MapTypeId.ROADMAP,
+            mapTypeControl: false,
+            streetViewControl: false,
+            fullscreenControl: false,
+            zoomControl: true,
+            styles: [
+                {
+                    featureType: "water",
+                    elementType: "geometry.fill",
+                    stylers: [
+                        { color: "#ffffff" }
+                    ]
+                },
+                {
+                    featureType: "water",
+                    elementType: "labels",
+                    stylers: [
+                        { visibility: "off" }
+                    ]
+                },
+                {
+                    featureType: "poi",
+                    stylers: [
+                        { visibility: "off" }
+                    ]
+                },
+                {
+                    featureType: "transit",
+                    stylers: [
+                        { visibility: "off" }
+                    ]
+                }
+            ]
+        };
+
+        // Création de la carte
+        const map = new google.maps.Map(mapElement, mapOptions);
+
+        // Récupération et validation des coordonnées
+        const coordinates = {{ territory_json|tojson|safe }};
+        if (!coordinates || !coordinates.length) {
+            console.error('No coordinates found');
+            return;
+        }
+
+        // Création du polygone
+        const polygonPath = coordinates.map(coord => ({
+            lat: parseFloat(coord[0]),
+            lng: parseFloat(coord[1])
+        }));
+
+        const polygon = new google.maps.Polygon({
+            paths: polygonPath,
+            strokeColor: '#000000',
+            strokeOpacity: 1.0,
+            strokeWeight: 1,
+            fillColor: '#FFE4E1',
+            fillOpacity: 0.5
+        });
+
+        // Calcul des limites pour centrer la carte
+        const bounds = new google.maps.LatLngBounds();
+        polygonPath.forEach(coord => bounds.extend(coord));
+
+        // Affichage du polygone et centrage de la carte
+        polygon.setMap(map);
+        map.fitBounds(bounds);
+
+        // Ajustement du zoom pour une meilleure vue
+        google.maps.event.addListenerOnce(map, 'bounds_changed', () => {
+            if (map.getZoom() > 17) map.setZoom(17);
+        });
+
+    } catch (error) {
+        console.error('Error initializing map:', error);
+    }
+}
+
+// Chargement asynchrone de l'API Google Maps
+function loadGoogleMapsAPI() {
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&callback=initMap`;
+    script.async = true;
+    script.defer = true;
+    document.head.appendChild(script);
+}
+
+// Chargement de l'API une fois que la page est prête
+window.addEventListener('load', loadGoogleMapsAPI);
+</script>
+{% endblock %}

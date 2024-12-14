@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+
+{% block title %}Carte {{ territory.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Format 10x15 cm */
+    @page {
+        size: 10cm 15cm;
+        margin: 0;
+    }
+
+    body {
+        margin: 0;
+        padding: 0;
+        width: 10cm;
+        height: 15cm;
+    }
+
+    .territory-card {
+        width: 10cm;
+        height: 15cm;
+        position: relative;
+        page-break-inside: avoid;
+        background: white;
+        padding: 0.5cm;
+        box-sizing: border-box;
+    }
+
+    .territory-header {
+        margin-bottom: 0.2cm;
+        text-align: center;
+    }
+
+    .territory-header h2 {
+        margin: 0;
+        font-size: 14pt;
+    }
+
+    #map {
+        height: 9cm;
+        width: 9cm;
+        margin-bottom: 0.2cm;
+    }
+
+    .territory-info {
+        font-size: 9pt;
+        margin-bottom: 0.2cm;
+    }
+
+    .qr-section {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin-top: 0.2cm;
+    }
+
+    .qr-code {
+        width: 2.5cm;
+        height: 2.5cm;
+    }
+
+    .streets-list {
+        font-size: 8pt;
+        margin: 0.2cm 0;
+    }
+        
+    .streets-list h6 {
+        font-size: 9pt;
+        margin-bottom: 0.1cm;
+    }
+        
+    .streets-list ul {
+        margin: 0;
+        padding-left: 0.3cm;
+        columns: 2;
+        column-gap: 0.3cm;
+    }
+
+    /* Masquer les éléments non nécessaires pour l'impression */
+    @media print {
+        .no-print {
+            display: none !important;
+        }
+        
+        .territory-card {
+            break-inside: avoid;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="territory-card">
+    <div class="territory-header">
+        <h2>{{ territory.name }}</h2>
+        <div class="btn-group">
+            <a href="{{ url_for('print_territory_card', uuid=territory.uuid) }}" class="btn btn-primary" target="_blank">
+                <i class="fas fa-print"></i> Imprimer la carte
+            </a>
+        </div>
+        <div class="territory-info">
+            <p class="text-muted">À titre indicatif : {{ territory.sonnettes if territory.sonnettes is not none else 0 }} sonnettes</p>
+            {% if territory.commentaire %}
+            <p class="territory-note"><strong>Note :</strong> {{ territory.commentaire }}</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="streets-list">
+        <h6>Rues concernées :</h6>
+        <ul id="streetsList">
+            <li><small class="text-muted">Chargement...</small></li>
+        </ul>
+    </div>
+
+    <div class="qr-section">
+        <img src="{{ url_for('static', filename='qrcodes/' + territory.uuid + '.png') }}" 
+             alt="QR Code" class="qr-code">
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let map;
+
+// S'assurer que la fonction est disponible globalement
+window.initMap = function() {
+    console.log('Initializing map...');
+    const coordinates = {{ territory.coordinates|tojson|safe }};
+    console.log('Territory coordinates:', coordinates);
+    
+    try {
+        const bounds = new google.maps.LatLngBounds();
+        
+        // Créer la carte
+        map = new google.maps.Map(document.getElementById('map'), {
+            zoom: 17,
+            mapTypeId: 'roadmap',
+            streetViewControl: false,
+            mapTypeControl: true,
+            zoomControl: true,
+            fullscreenControl: true
+        });
+        
+        // Créer le polygone
+        const polygonCoords = coordinates.map(coord => {
+            if (Array.isArray(coord)) {
+                return { lat: parseFloat(coord[1]), lng: parseFloat(coord[0]) };
+            } else {
+                return { lat: parseFloat(coord.lat), lng: parseFloat(coord.lng) };
+            }
+        });
+        
+        const polygon = new google.maps.Polygon({
+            paths: polygonCoords,
+            strokeColor: '#FF0000',
+            strokeOpacity: 0.8,
+            strokeWeight: 2,
+            fillColor: '#FF0000',
+            fillOpacity: 0.35
+        });
+        
+        // Ajouter le polygone à la carte
+        polygon.setMap(map);
+        
+        // Ajuster les limites de la carte
+        polygonCoords.forEach(coord => {
+            bounds.extend(coord);
+        });
+        map.fitBounds(bounds);
+        
+        console.log('Map initialized successfully');
+    } catch (error) {
+        console.error('Error initializing map:', error);
+    }
+};
+
+// Fonction pour charger les rues
+function loadStreets() {
+    console.log('Loading streets...');
+    const streetsList = document.getElementById('streetsList');
+    const territoryUuid = {{ territory.uuid|tojson|safe }};
+    
+    fetch(`/territory/${territoryUuid}/streets`)
+        .then(response => {
+            console.log('Streets response:', response);
+            return response.json();
+        })
+        .then(data => {
+            console.log('Streets data:', data);
+            streetsList.innerHTML = '';
+            
+            if (data.streets && data.streets.length > 0) {
+                data.streets.forEach(street => {
+                    const li = document.createElement('li');
+                    li.textContent = street;
+                    streetsList.appendChild(li);
+                });
+            } else {
+                const li = document.createElement('li');
+                li.innerHTML = '<small class="text-muted">Aucune rue trouvée</small>';
+                streetsList.appendChild(li);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading streets:', error);
+            streetsList.innerHTML = '<li><small class="text-danger">Erreur lors du chargement des rues</small></li>';
+        });
+}
+
+// Charger l'API Google Maps
+document.addEventListener('DOMContentLoaded', function() {
+    var script = document.createElement('script');
+    script.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyB-v8aL4nH79zGM2yp2YuQhZImEPTT_pj0&callback=initMap';
+    script.async = true;
+    script.defer = true;
+    document.head.appendChild(script);
+    
+    // Charger les rues une fois que le DOM est chargé
+    loadStreets();
+});
+</script>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+{% endblock %}

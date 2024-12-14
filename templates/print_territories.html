@@ -64,30 +64,20 @@
                         <div class="col-md-4">
                             <ul class="list-group list-group-flush">
                                 <li class="list-group-item">
-                                    <strong>Maisons :</strong> {{ territory.building_stats.get('houses', 0) }}
+                                    <strong>Maisons :</strong> {{ territory.buildings if territory.buildings is not none else 0 }}
                                 </li>
                                 <li class="list-group-item">
-                                    <strong>Appartements :</strong> {{ territory.building_stats.get('apartments', 0) }}
-                                    {% if territory.building_stats.get('apartment_buildings', 0) > 0 %}
-                                    <br><small class="text-muted">(dans {{ territory.building_stats.get('apartment_buildings', 0) }} immeubles)</small>
+                                    <strong>Appartements :</strong> {{ territory.apartments if territory.apartments is not none else 0 }}
+                                </li>
+                                <li class="list-group-item">
+                                    <strong>Sonnettes :</strong> 
+                                    {% if territory.sonnettes is not none %}
+                                        {{ territory.sonnettes }}
+                                    {% else %}
+                                        {{ (territory.buildings if territory.buildings is not none else 0) + 
+                                           (territory.apartments if territory.apartments is not none else 0) }}
                                     {% endif %}
                                 </li>
-                                <li class="list-group-item">
-                                    <strong>Sonnettes :</strong> {{ territory.building_stats.get('total_doorbells', 0) }}
-                                </li>
-                                {% if territory.building_stats.get('large_buildings', []) %}
-                                <li class="list-group-item">
-                                    <strong>Grands immeubles :</strong>
-                                    <ul class="list-unstyled mt-2">
-                                        {% for building in territory.building_stats.get('large_buildings', []) %}
-                                        <li>
-                                            {{ building.address }} 
-                                            <br><small class="text-muted">{{ building.doorbells }} sonnettes</small>
-                                        </li>
-                                        {% endfor %}
-                                    </ul>
-                                </li>
-                                {% endif %}
                             </ul>
                             <div class="mt-3 text-center">
                                 <img src="{{ url_for('static', filename='qrcodes/' + territory.uuid + '.png') }}" 
@@ -99,25 +89,19 @@
             </div>
         </div>
 
-        <!-- Modal de confirmation de suppression pour chaque territoire -->
         <div class="modal fade" id="deleteModal-{{ territory.uuid }}" tabindex="-1" aria-labelledby="deleteModalLabel-{{ territory.uuid }}" aria-hidden="true">
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title" id="deleteModalLabel-{{ territory.uuid }}">Confirmer la suppression</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
-                        <p>Êtes-vous sûr de vouloir supprimer le territoire "{{ territory.name }}" ?</p>
-                        <p class="text-danger">Cette action est irréversible.</p>
+                        Êtes-vous sûr de vouloir supprimer le territoire "{{ territory.name }}" ?
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
-                        <form action="{{ url_for('delete_territory', uuid=territory.uuid) }}" method="POST" style="display: inline;">
-                            <button type="submit" class="btn btn-danger">
-                                <i class="fas fa-trash"></i> Supprimer définitivement
-                            </button>
-                        </form>
+                        <button type="button" class="btn btn-danger" onclick="deleteTerritory('{{ territory.uuid }}')">Supprimer</button>
                     </div>
                 </div>
             </div>
@@ -127,41 +111,81 @@
 </div>
 
 <script>
-function initMap() {
+// Définir la fonction initMap avant le chargement de l'API
+function initializeGoogleMaps() {
     {% for territory in territories %}
-    (function() {
-        const territory = {{ territory.polygon_data | tojson | safe }};
-        const coordinates = territory.geometry.coordinates[0];
-        
-        // Calculer le centre approximatif du polygone
-        let lat = 0, lng = 0;
-        coordinates.forEach(coord => {
-            lat += coord[1];
-            lng += coord[0];
+    try {
+        var mapElement = document.getElementById('map-{{ territory.uuid }}');
+        if (!mapElement) {
+            console.error('Map element not found for territory {{ territory.uuid }}');
+            return;
+        }
+
+        var map{{ territory.uuid }} = new google.maps.Map(mapElement, {
+            zoom: 15,
+            streetViewControl: false,
+            mapTypeControl: false,
+            center: {lat: 0, lng: 0}  // Default center
         });
-        lat /= coordinates.length;
-        lng /= coordinates.length;
+
+        var coordinates = {{ territory.coordinates|tojson }};
+        var bounds = new google.maps.LatLngBounds();
         
-        const map = new google.maps.Map(document.getElementById('map-{{ territory.uuid }}'), {
-            zoom: 16,
-            center: { lat: lat, lng: lng },
-            mapTypeId: 'satellite'
-        });
-        
-        // Créer le polygone du territoire
-        const territoryPolygon = new google.maps.Polygon({
-            paths: coordinates.map(coord => ({ lat: coord[1], lng: coord[0] })),
-            strokeColor: '#FF0000',
-            strokeOpacity: 0.8,
-            strokeWeight: 2,
-            fillColor: '#FF0000',
-            fillOpacity: 0.35
-        });
-        
-        territoryPolygon.setMap(map);
-    })();
+        if (coordinates && coordinates.length > 0) {
+            var polygon = new google.maps.Polygon({
+                paths: coordinates,
+                strokeColor: '#FF0000',
+                strokeOpacity: 0.8,
+                strokeWeight: 2,
+                fillColor: '#FF0000',
+                fillOpacity: 0.35
+            });
+
+            polygon.setMap(map{{ territory.uuid }});
+
+            coordinates.forEach(function(coord) {
+                bounds.extend(new google.maps.LatLng(coord.lat, coord.lng));
+            });
+
+            map{{ territory.uuid }}.fitBounds(bounds);
+        }
+    } catch (error) {
+        console.error('Error initializing map for territory {{ territory.uuid }}:', error);
+    }
     {% endfor %}
 }
+
+// S'assurer que la fonction est disponible globalement
+window.initMap = initializeGoogleMaps;
+
+function deleteTerritory(uuid) {
+    fetch(`/territories/${uuid}/delete`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            window.location.reload();
+        } else {
+            alert('Erreur lors de la suppression du territoire');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Erreur lors de la suppression du territoire');
+    });
+}
+
+// Charger l'API Google Maps
+document.addEventListener('DOMContentLoaded', function() {
+    var script = document.createElement('script');
+    script.src = 'https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&callback=initMap';
+    script.async = true;
+    script.defer = true;
+    document.body.appendChild(script);
+});
 </script>
-<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&callback=initMap" async defer></script>
 {% endblock %}

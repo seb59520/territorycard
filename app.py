@@ -1,6 +1,7 @@
 import os
 import uuid
 import requests
+import traceback
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_migrate import Migrate
@@ -36,20 +37,39 @@ def load_user(id):
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    app.logger.info("Login route accessed")
     if current_user.is_authenticated:
+        app.logger.info("User already authenticated, redirecting to index")
         return redirect(url_for('index'))
+    
     form = LoginForm()
     if form.validate_on_submit():
+        app.logger.info(f"Login form submitted for email: {form.email.data}")
         user = User.query.filter_by(email=form.email.data).first()
-        if user is None or not user.check_password(form.password.data):
+        
+        if user is None:
+            app.logger.warning(f"No user found with email: {form.email.data}")
             flash('Email ou mot de passe invalide')
             return redirect(url_for('login'))
+            
+        if not user.check_password(form.password.data):
+            app.logger.warning(f"Invalid password for user: {form.email.data}")
+            flash('Email ou mot de passe invalide')
+            return redirect(url_for('login'))
+            
+        if not user.is_active:
+            app.logger.warning(f"Inactive user attempted login: {form.email.data}")
+            flash('Ce compte est désactivé')
+            return redirect(url_for('login'))
+        
+        app.logger.info(f"Successful login for user: {form.email.data}")
         login_user(user, remember=form.remember_me.data)
         next_page = request.args.get('next')
         if not next_page or urlparse(next_page).netloc != '':
             next_page = url_for('index')
         return redirect(next_page)
-    return render_template('login.html', title='Se connecter', form=form)
+    
+    return render_template('login.html', title='Connexion', form=form)
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -132,267 +152,192 @@ else:
 # Stockage des territoires en mémoire (dans un vrai système, cela serait dans une base de données)
 territories_store = {}
 
-def parse_kml(filepath):
-    """Parse le fichier KML et retourne les coordonnées des polygones"""
-    try:
-        app.logger.info(f"Début du parsing du fichier KML: {filepath}")
-        
-        # Vérifier si le fichier existe
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Le fichier KML n'existe pas: {filepath}")
-        
-        # Vérifier la taille du fichier
-        file_size = os.path.getsize(filepath)
-        app.logger.info(f"Taille du fichier: {file_size} bytes")
-        
-        if file_size == 0:
-            raise ValueError("Le fichier KML est vide")
-        
-        # Lire et afficher le contenu brut du fichier
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-            app.logger.info(f"Contenu du fichier KML:\n{content[:1000]}...")  # Affiche les 1000 premiers caractères
-        
-        # Vérifier que le contenu contient des balises KML basiques
-        if '<kml' not in content.lower():
-            raise ValueError("Le fichier ne semble pas être un fichier KML valide (balise <kml> non trouvée)")
-        
-        tree = ET.parse(filepath)
-        root = tree.getroot()
-        
-        app.logger.info(f"Tag racine: {root.tag}")
-        app.logger.info(f"Attributs racine: {root.attrib}")
-        
-        # Afficher la structure du document
-        def print_element_tree(element, level=0):
-            app.logger.info("  " * level + f"- {element.tag}")
-            for child in element:
-                print_element_tree(child, level + 1)
-        
-        app.logger.info("\nStructure du document KML:")
-        print_element_tree(root)
-        
-        # Gestion des namespaces, y compris les namespaces vides
-        namespaces = {
-            'kml': 'http://www.opengis.net/kml/2.2',
-            'ns': '',  # namespace vide
-            None: '',  # namespace par défaut
-            '': ''     # namespace explicitement vide
-        }
-        
-        # Recherche des coordonnées dans tous les types de géométrie possibles
-        coordinates = []
-        
-        # Chercher dans les Polygons avec différents namespaces et structures
-        polygon_paths = [
-            './/Polygon/outerBoundaryIs/LinearRing/coordinates',
-            './/kml:Polygon/kml:outerBoundaryIs/kml:LinearRing/kml:coordinates',
-            './/ns:Polygon/ns:outerBoundaryIs/ns:LinearRing/ns:coordinates',
-            './/Placemark//Polygon//coordinates',
-            './/kml:Placemark//kml:Polygon//kml:coordinates',
-            './/Placemark/Polygon/outerBoundaryIs/LinearRing/coordinates',
-            './/MultiGeometry/Polygon/outerBoundaryIs/LinearRing/coordinates',
-            './/kml:MultiGeometry/kml:Polygon/kml:outerBoundaryIs/kml:LinearRing/kml:coordinates',
-            './/coordinates',  # Recherche directe des balises coordinates
-            './/kml:coordinates'  # Recherche directe avec namespace KML
-        ]
-        
-        def extract_points(coord_str):
-            points = []
-            app.logger.info(f"Traitement des coordonnées brutes: {coord_str[:100]}...")  # Affiche le début des coordonnées
-            
-            # Nettoyer la chaîne de coordonnées
-            coord_str = coord_str.strip()
-            
-            # Séparer les points
-            coord_parts = [p for p in coord_str.split() if p.strip()]
-            app.logger.info(f"Nombre de points trouvés: {len(coord_parts)}")
-            
-            for point in coord_parts:
-                try:
-                    parts = point.strip().split(',')
-                    app.logger.info(f"Point brut: {point}, parties: {parts}")
-                    
-                    if len(parts) >= 2:
-                        lon, lat = parts[:2]
-                        lon = float(lon.strip())
-                        lat = float(lat.strip())
-                        points.append([lon, lat])
-                except Exception as e:
-                    app.logger.error(f"Erreur lors du parsing d'un point: {point} - {str(e)}")
-            
-            return points
-        
-        # Recherche avec les différents chemins
-        for path in polygon_paths:
-            app.logger.info(f"\nEssai du chemin: {path}")
-            elements = root.findall(path, namespaces)
-            app.logger.info(f"Nombre d'éléments trouvés: {len(elements)}")
-            
-            for coords in elements:
-                app.logger.info(f"Trouvé des coordonnées avec le chemin: {path}")
-                coord_str = coords.text
-                if coord_str:
-                    points = extract_points(coord_str)
-                    if points:
-                        app.logger.info(f"Nombre de points extraits: {len(points)}")
-                        app.logger.info(f"Premier point: {points[0]}")
-                        coordinates.append(points)
-        
-        # Si aucune coordonnée n'est trouvée, essayer une recherche récursive
-        if not coordinates:
-            app.logger.info("\nAucune coordonnée trouvée avec les chemins standards, tentative de recherche récursive...")
-            for elem in root.iter():
-                if elem.tag.endswith('coordinates'):
-                    app.logger.info(f"Trouvé balise coordinates: {elem.tag}")
-                    coord_str = elem.text
-                    if coord_str:
-                        points = extract_points(coord_str)
-                        if points:
-                            app.logger.info(f"Trouvé {len(points)} points en recherche récursive")
-                            coordinates.append(points)
-        
-        app.logger.info(f"\nNombre total de formes trouvées: {len(coordinates)}")
-        if coordinates:
-            app.logger.info(f"Premier point du premier polygone: {coordinates[0][0]}")
-            return coordinates
-        else:
-            app.logger.info("Aucune coordonnée trouvée dans le fichier KML")
-            return None
-            
-    except ET.ParseError as e:
-        app.logger.error(f"Erreur de parsing XML: {str(e)}")
-        import traceback
-        app.logger.error(traceback.format_exc())
-        return None
-    except Exception as e:
-        app.logger.error(f"Erreur lors du parsing KML: {str(e)}")
-        import traceback
-        app.logger.error(traceback.format_exc())
-        return None
+import tempfile
+import traceback
 
-def count_buildings_and_apartments(polygon):
-    """Compte le nombre de bâtiments et d'appartements dans un polygone en utilisant Overpass API"""
+def parse_kml(kml_file):
+    """Parse un fichier KML et retourne une liste de territoires avec leurs coordonnées"""
+    app.logger.info("=== Début du parsing KML ===")
     try:
-        # Construire la requête Overpass pour obtenir plus de détails sur les bâtiments
-        # Convertir les coordonnées [lng, lat] en format "lat lng"
-        polygon_coords = " ".join([f"{coord[1]} {coord[0]}" for coord in polygon])
+        # Créer un fichier temporaire
+        temp_dir = tempfile.mkdtemp()
+        temp_path = os.path.join(temp_dir, 'temp.kml')
         
-        # Requête pour obtenir tous les bâtiments avec leurs attributs
+        # Lire et réécrire le fichier pour gérer le BOM et autres problèmes d'encodage
+        content = kml_file.read().decode('utf-8-sig')  # utf-8-sig gère le BOM
+        app.logger.info(f"Contenu du fichier (premiers 500 caractères): {content[:500]}")
+        
+        # Vérifier si le contenu ressemble à du KML
+        if not ('<kml' in content or '<Placemark' in content):
+            app.logger.error("Le fichier ne semble pas être un KML valide")
+            return False, "Le fichier ne semble pas être un KML valide"
+        
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        
+        app.logger.info(f"Fichier temporaire créé: {temp_path}")
+
+        # Parser le fichier KML
+        try:
+            tree = ET.parse(temp_path)
+            root = tree.getroot()
+        except ET.ParseError as e:
+            app.logger.error(f"Erreur de parsing XML: {str(e)}")
+            return False, f"Erreur de parsing XML: {str(e)}"
+        
+        # Gérer l'espace de noms KML
+        ns = {'kml': 'http://www.opengis.net/kml/2.2'}
+        
+        # Trouver tous les placemarks
+        placemarks = root.findall('.//kml:Placemark', ns)
+        if not placemarks:
+            placemarks = root.findall('.//Placemark')  # Essayer sans namespace
+        
+        if not placemarks:
+            app.logger.error("Aucun Placemark trouvé dans le fichier KML")
+            return False, "Aucun territoire (Placemark) trouvé dans le fichier KML"
+        
+        app.logger.info(f"Nombre total de territoires trouvés: {len(placemarks)}")
+        
+        territories = []
+        for i, placemark in enumerate(placemarks, 1):
+            try:
+                app.logger.info(f"Traitement du territoire {i}/{len(placemarks)}")
+                
+                # Extraire le nom et les informations supplémentaires
+                name = placemark.findtext('kml:name', '', ns) or placemark.findtext('name', '')
+                territory_type = placemark.findtext('kml:territoryType', '', ns) or placemark.findtext('territoryType', '')
+                territory_number = placemark.findtext('kml:territoryNumber', '', ns) or placemark.findtext('territoryNumber', '')
+                
+                app.logger.info(f"Nom du territoire: {name}")
+                app.logger.info(f"Type de territoire: {territory_type}")
+                app.logger.info(f"Numéro de territoire: {territory_number}")
+                
+                # Extraire les coordonnées
+                coords_elem = None
+                for path in ['.//kml:LinearRing/kml:coordinates', './/LinearRing/coordinates']:
+                    coords_elem = placemark.find(path, ns)
+                    if coords_elem is not None:
+                        break
+                
+                if coords_elem is None or not coords_elem.text:
+                    app.logger.warning(f"Pas de coordonnées trouvées pour le territoire {name}")
+                    continue
+                
+                coords_text = coords_elem.text.strip()
+                coords_list = []
+                
+                # Parser les coordonnées
+                for coord in coords_text.split():
+                    try:
+                        parts = coord.split(',')
+                        if len(parts) >= 2:
+                            lon, lat = float(parts[0]), float(parts[1])
+                            coords_list.append([lon, lat])
+                    except (ValueError, IndexError) as e:
+                        app.logger.warning(f"Erreur lors du parsing des coordonnées {coord}: {e}")
+                        continue
+                
+                if not coords_list:
+                    app.logger.warning(f"Aucune coordonnée valide trouvée pour le territoire {name}")
+                    continue
+                
+                # Calculer le centre du polygone pour déterminer la ville
+                center_lat = sum(point[1] for point in coords_list) / len(coords_list)
+                center_lon = sum(point[0] for point in coords_list) / len(coords_list)
+                
+                # Obtenir le nom de la ville
+                city = get_city_from_coordinates([[center_lon, center_lat]])
+                app.logger.info(f"Ville déterminée pour le territoire {name}: {city}")
+                
+                territory = {
+                    'name': name,
+                    'type': territory_type,
+                    'number': territory_number,
+                    'coordinates': coords_list,
+                    'city': city
+                }
+                territories.append(territory)
+                app.logger.info(f"Territoire ajouté: {territory['name']} ({territory['number']})")
+                
+            except Exception as e:
+                app.logger.error(f"Erreur lors du traitement du territoire {i}: {e}")
+                app.logger.error(traceback.format_exc())
+                continue
+        
+        if not territories:
+            app.logger.error("Aucun territoire valide n'a pu être extrait du fichier KML")
+            return False, "Aucun territoire valide n'a pu être extrait du fichier KML"
+        
+        app.logger.info(f"=== Fin du parsing KML avec succès: {len(territories)} territoires extraits ===")
+        return True, territories
+        
+    except Exception as e:
+        app.logger.error(f"Erreur lors du parsing KML: {e}")
+        app.logger.error(traceback.format_exc())
+        return False, str(e)
+    finally:
+        try:
+            # Nettoyer les fichiers temporaires
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            os.rmdir(temp_dir)
+            app.logger.info("Fichiers temporaires nettoyés")
+        except Exception as e:
+            app.logger.error(f"Erreur lors du nettoyage des fichiers temporaires: {e}")
+
+def count_buildings_and_apartments(coordinates):
+    """Compte le nombre total de sonnettes dans un territoire"""
+    try:
+        # Convertir les coordonnées au format requis par Overpass
+        overpass_coords = []
+        for coord in coordinates:
+            if isinstance(coord, dict):
+                overpass_coords.append(f"{coord['lat']} {coord['lng']}")
+            else:
+                overpass_coords.append(f"{coord[1]} {coord[0]}")
+
+        # Créer la requête Overpass
+        area = " ".join(overpass_coords)
         query = f"""
         [out:json][timeout:25];
         (
-            way(poly:"{polygon_coords}")["building"];
-            relation(poly:"{polygon_coords}")["building"];
+          way(poly:"{area}")["building"];
+          relation(poly:"{area}")["building"];
         );
         out body;
         >;
         out skel qt;
         """
-        
-        # Appeler l'API Overpass
-        overpass_url = "https://overpass-api.de/api/interpreter"
-        app.logger.info(f"Envoi de la requête Overpass : {query}")
-        response = requests.post(overpass_url, data={"data": query})
-        
-        if response.status_code != 200:
-            app.logger.error(f"Erreur Overpass API: {response.status_code}")
-            app.logger.error(f"Réponse: {response.text}")
-            return {'houses': 0, 'apartments': 0, 'apartment_buildings': 0, 'large_buildings': [], 'total_doorbells': 0}
-            
+
+        # Faire la requête à l'API Overpass
+        overpass_url = "http://overpass-api.de/api/interpreter"
+        response = requests.post(overpass_url, data=query)
         data = response.json()
-        buildings = data.get('elements', [])
-        app.logger.info(f"Nombre de bâtiments trouvés : {len(buildings)}")
-        
-        # Analyser les types de bâtiments
-        building_types = {}
-        for building in buildings:
-            tags = building.get('tags', {})
-            building_type = tags.get('building', 'unknown')
-            if building_type not in building_types:
-                building_types[building_type] = 0
-            building_types[building_type] += 1
-            
-        app.logger.info(f"Types de bâtiments trouvés : {building_types}")
-        
-        # Analyser les attributs des bâtiments
-        total_houses = 0
-        total_apartments = 0
-        apartment_buildings = 0
+
         total_doorbells = 0
-        large_buildings = []
-        
-        for building in buildings:
-            tags = building.get('tags', {})
-            building_type = tags.get('building', '')
-            
-            # Loguer les tags pour analyse
-            app.logger.info(f"Tags du bâtiment : {tags}")
-            
-            # Essayer de déterminer le type de bâtiment en utilisant d'autres tags
-            if building_type in ['yes', 'unknown', '']:
-                # Vérifier les autres tags pour deviner le type
-                if 'building:levels' in tags:
-                    levels = int(tags.get('building:levels', '1'))
-                    if levels >= 3:  # Si le bâtiment a 3 étages ou plus, c'est probablement un immeuble
-                        building_type = 'apartments'
-                    else:
-                        building_type = 'house'  # Sinon, c'est probablement une maison
+
+        # Analyser chaque bâtiment
+        for element in data['elements']:
+            if element['type'] in ['way', 'relation'] and 'tags' in element:
+                tags = element['tags']
+                building_type = tags.get('building', 'unknown')
+                
+                # Compter les sonnettes
+                if building_type in ['apartments', 'residential'] or 'apartments' in tags:
+                    # Pour les immeubles, estimer le nombre d'appartements
+                    levels = int(tags.get('building:levels', '3'))
+                    apts_per_floor = int(tags.get('apartments_per_floor', '2'))
+                    total_doorbells += levels * apts_per_floor
                 else:
-                    # Par défaut, considérer comme une maison
-                    building_type = 'house'
-            
-            # Compter les maisons
-            if building_type in ['house', 'detached', 'residential', 'terrace', 'yes']:
-                total_houses += 1
-                total_doorbells += 1  # Une sonnette par maison
-                
-            # Compter les appartements et immeubles
-            elif building_type in ['apartments', 'apartment']:
-                apartment_buildings += 1
-                # Estimer le nombre d'appartements basé sur les étages
-                levels = int(tags.get('building:levels', '3'))  # Par défaut 3 étages
-                apartments_per_level = 2  # estimation par défaut
-                estimated_apartments = levels * apartments_per_level
-                total_apartments += estimated_apartments
-                total_doorbells += estimated_apartments
-                
-            # Vérifier les sonnettes explicitement définies
-            doorbells = tags.get('building:doorbells', tags.get('addr:doorbells', '0'))
-            try:
-                explicit_doorbells = int(doorbells)
-                if explicit_doorbells > 0:
-                    # Si nous avons un nombre explicite de sonnettes, utiliser cette valeur
-                    total_doorbells = total_doorbells - estimated_apartments + explicit_doorbells
-                    total_apartments = total_apartments - estimated_apartments + explicit_doorbells
-            except (ValueError, UnboundLocalError):
-                pass
-                
-            # Identifier les grands bâtiments
-            if building_type in ['commercial', 'retail', 'office', 'industrial']:
-                large_buildings.append({
-                    'type': building_type,
-                    'levels': tags.get('building:levels', 'unknown'),
-                    'name': tags.get('name', 'unknown')
-                })
-        
-        result = {
-            'houses': total_houses,
-            'apartments': total_apartments,
-            'apartment_buildings': apartment_buildings,
-            'large_buildings': large_buildings,
-            'total_doorbells': total_doorbells,
-            'building_types': building_types  # Ajouter les statistiques détaillées
-        }
-        
-        app.logger.info(f"Statistiques des bâtiments : {result}")
-        return result
-        
+                    # Pour les autres bâtiments, ajouter une sonnette
+                    total_doorbells += 1
+
+        return {'total_doorbells': total_doorbells}
+
     except Exception as e:
-        app.logger.error(f"Erreur lors du comptage des bâtiments: {str(e)}")
-        import traceback
-        app.logger.error(traceback.format_exc())
-        return {'houses': 0, 'apartments': 0, 'apartment_buildings': 0, 'large_buildings': [], 'total_doorbells': 0}
+        print(f"Erreur lors du comptage des sonnettes : {str(e)}")
+        return {'total_doorbells': 0}
 
 def get_city_from_coordinates(polygon):
     """Récupère le nom de la ville à partir des coordonnées du centre du polygone"""
@@ -401,10 +346,10 @@ def get_city_from_coordinates(polygon):
         lats = [p[1] for p in polygon]
         lngs = [p[0] for p in polygon]
         center_lat = sum(lats) / len(lats)
-        center_lng = sum(lngs) / len(lngs)
+        center_lon = sum(lngs) / len(lngs)
         
         # Utiliser Nominatim pour obtenir les informations de localisation
-        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={center_lat}&lon={center_lng}"
+        url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={center_lat}&lon={center_lon}"
         headers = {
             'User-Agent': 'TerritoryDivider/1.0'
         }
@@ -452,164 +397,204 @@ def get_next_territory_number():
 @login_required
 def upload_kml():
     try:
-        if 'kml_file' not in request.files:
-            app.logger.error("Erreur: Pas de fichier dans la requête")
-            return jsonify({'error': 'No file uploaded'}), 400
+        app.logger.info("=== Début de l'upload KML ===")
         
-        file = request.files['kml_file']
+        if 'file' not in request.files:
+            app.logger.error("Aucun fichier n'a été uploadé")
+            return jsonify({'error': 'Aucun fichier n\'a été uploadé'}), 400
+            
+        file = request.files['file']
+        app.logger.info(f"Fichier reçu: {file.filename}")
+        
         if file.filename == '':
-            app.logger.error("Erreur: Nom de fichier vide")
-            return jsonify({'error': 'No file selected'}), 400
-        
+            app.logger.error("Nom de fichier vide")
+            return jsonify({'error': 'Aucun fichier sélectionné'}), 400
+            
         if not file.filename.lower().endswith('.kml'):
-            app.logger.error("Erreur: Le fichier n'est pas un KML")
-            return jsonify({'error': 'File must be a KML file'}), 400
-        
-        # Sauvegarde du fichier KML
-        filename = str(uuid.uuid4()) + '.kml'
-        filepath = os.path.join('uploads', filename)
-        file.save(filepath)
-        
-        app.logger.info(f"Fichier KML sauvegardé: {filepath}")
+            app.logger.error("Le fichier n'est pas un KML")
+            return jsonify({'error': 'Le fichier doit être au format KML'}), 400
         
         # Parser le fichier KML
-        coordinates = parse_kml(filepath)
+        app.logger.info("Parsing du fichier KML...")
+        success, result = parse_kml(file)
         
-        if coordinates is None:
-            return jsonify({'error': 'Failed to parse KML file'}), 400
+        if not success:
+            app.logger.error(f"Erreur lors du parsing: {result}")
+            return jsonify({'error': result}), 400
         
-        if not coordinates:
-            return jsonify({'error': 'No valid coordinates found in KML file'}), 400
+        # Stocker les coordonnées pour une utilisation ultérieure
+        territories_store['coordinates'] = result
+        app.logger.info(f"Territoires stockés: {len(result)} territoires")
         
-        app.logger.info(f"Coordonnées extraites: {len(coordinates)} polygones trouvés")
-        
-        # Vérifier la validité des coordonnées
-        valid_coordinates = []
-        for polygon in coordinates:
-            if isinstance(polygon, list) and len(polygon) > 0:
-                valid_points = []
-                for point in polygon:
-                    if isinstance(point, list) and len(point) == 2:
-                        if isinstance(point[0], (int, float)) and isinstance(point[1], (int, float)):
-                            valid_points.append(point)
-                if valid_points:
-                    valid_coordinates.append(valid_points)
-        
-        if not valid_coordinates:
-            return jsonify({'error': 'No valid coordinates found after validation'}), 400
-        
-        app.logger.info(f"Nombre de polygones valides: {len(valid_coordinates)}")
-        app.logger.info(f"Premier polygone: {valid_coordinates[0][:3]}...")  # Affiche les 3 premiers points
-        
+        app.logger.info("=== Fin de l'upload KML avec succès ===")
         return jsonify({
-            'coordinates': valid_coordinates
+            'success': True,
+            'message': f"{len(result)} territoires trouvés",
+            'territories': result
         })
         
     except Exception as e:
-        app.logger.error(f"Erreur lors du traitement du fichier KML: {str(e)}")
-        import traceback
+        app.logger.error(f"Erreur lors de l'upload: {str(e)}")
         app.logger.error(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'error': 'Une erreur est survenue lors du traitement du fichier',
+            'details': str(e)
+        }), 500
+
+def generate_territories(kml_data, user_id):
+    """Génère des territoires à partir des données KML"""
+    app.logger.info("=== Début de la génération des territoires ===")
+    try:
+        territories = []
+        for territory_data in kml_data:
+            try:
+                # Générer un UUID pour le territoire
+                territory_uuid = str(uuid.uuid4())
+                app.logger.info(f"UUID généré: {territory_uuid}")
+
+                # Récupérer ou générer le numéro de territoire
+                territory_number = territory_data.get('number', '')
+                if not territory_number:
+                    territory_number = str(get_next_territory_number())
+                
+                # Récupérer le type de territoire
+                territory_type = territory_data.get('type', 'standard')
+                
+                # Récupérer les coordonnées et calculer les statistiques
+                polygon = territory_data.get('coordinates', [])
+                if not polygon:
+                    app.logger.warning(f"Pas de coordonnées pour le territoire {territory_data.get('name', 'sans nom')}")
+                    continue
+                
+                # Obtenir la ville si elle n'est pas déjà définie
+                city = territory_data.get('city')
+                if not city:
+                    city = get_city_from_coordinates(polygon)
+                
+                # Compter les bâtiments
+                building_stats = count_buildings_and_apartments(polygon)
+                
+                # Créer le territoire
+                territory = Territory(
+                    uuid=territory_uuid,
+                    name=territory_data.get('name', f'Territoire {territory_number}'),
+                    type=territory_type,
+                    number=territory_number,
+                    city=city,
+                    coordinates=polygon,
+                    sonnettes=building_stats['total_doorbells'],  # Nombre total de sonnettes
+                    user_id=user_id,
+                    commentaire=territory_data.get('commentaire', '')
+                )
+                
+                db.session.add(territory)
+                territories.append(territory)
+                app.logger.info(f"Territoire ajouté: {territory.name} ({territory.number})")
+                
+            except Exception as e:
+                app.logger.error(f"Erreur lors de la génération d'un territoire: {str(e)}")
+                app.logger.error(traceback.format_exc())
+                continue
+        
+        if territories:
+            try:
+                db.session.commit()
+                app.logger.info(f"{len(territories)} territoires créés avec succès")
+                return True, f"{len(territories)} territoires créés avec succès"
+            except Exception as e:
+                db.session.rollback()
+                app.logger.error(f"Erreur lors de la sauvegarde des territoires: {str(e)}")
+                app.logger.error(traceback.format_exc())
+                return False, f"Erreur lors de la sauvegarde des territoires: {str(e)}"
+        else:
+            app.logger.warning("Aucun territoire n'a été créé")
+            return False, "Aucun territoire n'a été créé"
+            
+    except Exception as e:
+        app.logger.error(f"Erreur lors de la génération des territoires: {str(e)}")
+        app.logger.error(traceback.format_exc())
+        return False, str(e)
 
 @app.route('/generate_territories', methods=['POST'])
 @login_required
-def generate_territories():
+def generate_territories_view():
     try:
-        app.logger.info("Début de generate_territories")
-        data = request.json
-        app.logger.info(f"Données reçues : {data}")
-        
-        if not data or 'coordinates' not in data:
-            app.logger.error("Erreur : pas de coordonnées fournies")
-            return jsonify({'error': 'No coordinates provided'}), 400
+        app.logger.info("=== Début de la génération des territoires ===")
+        coordinates = territories_store.get('coordinates', [])
+        app.logger.info(f"Nombre de territoires à générer: {len(coordinates)}")
+        app.logger.info(f"Contenu du store: {coordinates}")
 
-        coordinates = data['coordinates']
-        app.logger.info(f"Coordonnées : {coordinates}")
-        
-        if not coordinates or not isinstance(coordinates, list):
-            app.logger.error("Erreur : format de coordonnées invalide")
-            return jsonify({'error': 'Invalid coordinates data'}), 400
+        if not coordinates:
+            app.logger.error("Aucune coordonnée trouvée dans le store")
+            return jsonify({'status': 'error', 'message': 'Aucune coordonnée trouvée'}), 400
 
-        app.logger.info("Récupération de la ville...")
-        city = get_city_from_coordinates(coordinates)
-        app.logger.info(f"Ville trouvée : {city}")
-        
-        app.logger.info("Comptage des bâtiments...")
-        building_stats = count_buildings_and_apartments(coordinates)
-        app.logger.info(f"Statistiques des bâtiments : {building_stats}")
-        
-        # Créer le GeoJSON
-        polygon_data = {
-            "type": "Feature",
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [coordinates]
-            }
-        }
-        
-        # Générer un UUID pour le territoire
-        territory_id = str(uuid.uuid4())
-        app.logger.info(f"ID du territoire : {territory_id}")
-        
-        # Obtenir le prochain numéro de territoire
-        next_number = get_next_territory_number()
-        territory_name = f"T{next_number}-{city}"
-        app.logger.info(f"Nom du territoire : {territory_name}")
-        
-        # Créer le QR code
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=4,
-        )
-        
-        territory_url = f"{request.host_url}territory/{territory_id}"
-        qr.add_data(territory_url)
-        qr.make(fit=True)
+        success, result = generate_territories(coordinates, current_user.id)
+        if success:
+            return jsonify({'status': 'success', 'message': f"Territoires créés avec succès: {', '.join(result)}"}), 200
+        else:
+            return jsonify({'status': 'error', 'message': f"Erreurs lors de la génération des territoires: {', '.join(result)}"}), 400
 
-        qr_image = qr.make_image(fill_color="black", back_color="white")
-        qr_filename = f"{territory_id}.png"
-        qr_path = os.path.join(app.config['QR_FOLDER'], qr_filename)
-        qr_image.save(qr_path)
-        app.logger.info(f"QR code créé : {qr_path}")
-        
-        # Créer le territoire dans la base de données
-        territory = Territory(
-            uuid=territory_id,
-            name=territory_name,
-            city=city,
-            polygon_data=polygon_data,
-            building_stats=building_stats,
-            user=current_user
-        )
-        app.logger.info("Territoire créé, ajout à la base de données...")
-        db.session.add(territory)
-        db.session.commit()
-        app.logger.info("Territoire enregistré dans la base de données")
-        
-        # Ajouter le chemin du QR code à la réponse
-        territory_dict = territory.to_dict()
-        territory_dict['qr_code'] = url_for('static', filename=f'qrcodes/{qr_filename}')
-        
-        app.logger.info("Envoi de la réponse au client")
-        return jsonify({
-            'territories': [territory_dict]
-        })
-        
     except Exception as e:
-        app.logger.error(f"Erreur lors de la génération des territoires: {str(e)}")
-        import traceback
+        app.logger.error(f"Erreur générale: {str(e)}")
         app.logger.error(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+def generate_google_maps_url(coordinates):
+    # Calculer le centre du polygone
+    lats = [coord[1] if isinstance(coord, list) else coord['lat'] for coord in coordinates]
+    lngs = [coord[0] if isinstance(coord, list) else coord['lng'] for coord in coordinates]
+    center_lat = sum(lats) / len(lats)
+    center_lng = sum(lngs) / len(lngs)
+    
+    # Créer l'URL avec le centre et le zoom
+    base_url = f"https://www.google.com/maps/search/?api=1&query={center_lat},{center_lng}"
+    return base_url
 
 @app.route('/territory/<uuid>')
 @login_required
 def view_territory(uuid):
-    territory = Territory.query.filter_by(uuid=uuid).first_or_404()
-    return render_template('territory.html', 
-                         territory=territory, 
-                         google_maps_api_key=os.getenv('GOOGLE_MAPS_API_KEY'))
+    try:
+        app.logger.info(f"Affichage du territoire {uuid}")
+        territory = Territory.query.filter_by(uuid=uuid).first_or_404()
+        
+        # Vérifier que l'utilisateur est autorisé
+        if territory.user_id != current_user.id:
+            app.logger.warning(f"Accès non autorisé au territoire {uuid}")
+            flash("Vous n'êtes pas autorisé à voir ce territoire.", "danger")
+            return redirect(url_for('index'))
+        
+        app.logger.info(f"Territoire trouvé : {territory.name}")
+        app.logger.info(f"Coordonnées : {territory.coordinates}")
+        app.logger.info(f"Commentaire : {territory.commentaire}")
+        
+        # Générer le QR code pour Google Maps
+        maps_url = generate_google_maps_url(territory.coordinates)
+        qr = qrcode.QRCode(version=1, box_size=10, border=5)
+        qr.add_data(maps_url)
+        qr.make(fit=True)
+        
+        # Créer l'image QR code
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+        qr_path = os.path.join(app.config['QR_FOLDER'], f'{territory.uuid}.png')
+        qr_img.save(qr_path)
+        
+        # Récupérer la clé API Google Maps
+        google_maps_api_key = os.getenv('GOOGLE_MAPS_API_KEY')
+        if not google_maps_api_key:
+            app.logger.error("Clé API Google Maps non trouvée")
+            flash("Erreur : Clé API Google Maps manquante", "danger")
+            return redirect(url_for('index'))
+            
+        app.logger.info("Rendu du template territory.html")
+        return render_template('territory.html', 
+                             territory=territory, 
+                             google_maps_api_key=google_maps_api_key)
+                             
+    except Exception as e:
+        app.logger.error(f"Erreur lors de l'affichage du territoire : {str(e)}")
+        app.logger.exception(e)
+        flash("Une erreur est survenue lors de l'affichage du territoire.", "danger")
+        return redirect(url_for('index'))
 
 @app.route('/territory/<uuid>/delete', methods=['POST'])
 @login_required
@@ -654,25 +639,51 @@ def print_territories_by_city(city):
 @app.route('/territories/cities')
 @login_required
 def list_cities():
-    # Récupérer tous les territoires de l'utilisateur
-    territories = Territory.query.filter_by(user_id=current_user.id).all()
-    
-    # Organiser les territoires par ville
-    cities = {}
-    for territory in territories:
-        if territory.city not in cities:
-            cities[territory.city] = {
-                'count': 0,
-                'territories': []
+    """Liste toutes les villes avec leurs statistiques"""
+    try:
+        app.logger.info("Récupération de la liste des villes...")
+        territories = Territory.query.filter_by(user_id=current_user.id).all()
+        
+        # Pour les requêtes AJAX, renvoyer du JSON
+        cities = {}
+        for territory in territories:
+            if not territory.city:  # Skip territories without city
+                continue
+                
+            if territory.city not in cities:
+                cities[territory.city] = {
+                    'territories': 0,
+                    'houses': 0,
+                    'apartments': 0,
+                    'sonnettes': 0
+                }
+            cities[territory.city]['territories'] += 1
+            cities[territory.city]['houses'] += territory.buildings or 0
+            cities[territory.city]['apartments'] += territory.apartments or 0
+            # Gérer le cas où sonnettes n'est pas encore défini dans certains enregistrements
+            if hasattr(territory, 'sonnettes'):
+                cities[territory.city]['sonnettes'] += territory.sonnettes or 0
+        
+        # Convertir en liste pour le JSON
+        cities_list = [
+            {
+                'name': city,
+                'stats': stats
             }
-        cities[territory.city]['count'] += 1
-        cities[territory.city]['territories'].append({
-            'id': territory.uuid,
-            'name': territory.name,
-            'stats': territory.building_stats
-        })
-    
-    return render_template('cities.html', cities=cities)
+            for city, stats in cities.items()
+            if city  # Ne pas inclure les villes None ou vides
+        ]
+        
+        # Trier par nom de ville
+        cities_list.sort(key=lambda x: x['name'])
+        
+        app.logger.info(f"Villes trouvées : {[city['name'] for city in cities_list]}")
+        return jsonify({'cities': cities_list})
+        
+    except Exception as e:
+        app.logger.error(f"Erreur lors de la récupération des villes : {str(e)}")
+        app.logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/territory/<uuid>/rename', methods=['POST'])
 @login_required
@@ -712,50 +723,125 @@ def delete_territories():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/territory/<uuid>/card')
+@login_required
+def territory_card(uuid):
+    territory = Territory.query.filter_by(uuid=uuid).first_or_404()
+    return render_template('territory_card.html',
+                         territory=territory,
+                         google_maps_api_key=os.getenv('GOOGLE_MAPS_API_KEY'))
+
+@app.route('/territory/<uuid>/analyze', methods=['GET'])
+@login_required
+def analyze_territory(uuid):
+    """Analyse détaillée des statistiques d'un territoire"""
+    try:
+        territory = Territory.query.filter_by(uuid=uuid).first_or_404()
+        
+        # Vérifier que l'utilisateur est autorisé
+        if territory.user_id != current_user.id:
+            flash('Vous n\'êtes pas autorisé à voir ce territoire.', 'danger')
+            return redirect(url_for('index'))
+        
+        # Obtenir les statistiques détaillées
+        building_stats = count_buildings_and_apartments(territory.coordinates)
+        
+        # Ajouter plus de détails sur les bâtiments
+        detailed_stats = {
+            'buildings': {
+                'houses': 0,
+                'apartment_buildings': 0,
+                'apartments': 0,
+                'total_doorbells': building_stats['total_doorbells'],
+            },
+            'building_types': {},
+            'large_buildings': []
+        }
+        
+        return render_template('territory_analysis.html',
+                            territory=territory,
+                            stats=detailed_stats,
+                            google_maps_api_key=os.getenv('GOOGLE_MAPS_API_KEY'))
+        
+    except Exception as e:
+        flash(f'Une erreur est survenue : {str(e)}', 'danger')
+        return redirect(url_for('view_territory', uuid=uuid))
+
 def calculate_stats(territories):
     """Calcule les statistiques pour une liste de territoires"""
-    total_houses = 0
-    total_apartments = 0
-    total_buildings = 0
-    
-    for territory in territories:
-        if territory.building_stats:
-            total_houses += territory.building_stats.get('houses', 0)
-            total_apartments += territory.building_stats.get('apartments', 0)
-            total_buildings += territory.building_stats.get('apartment_buildings', 0)
-    
-    return {
+    stats = {
         'nb_territoires': len(territories),
-        'nb_maisons': total_houses,
-        'nb_appartements': total_apartments,
-        'nb_immeubles': total_buildings,
-        'nb_sonnettes': total_houses + total_apartments
+        'nb_maisons': 0,
+        'nb_appartements': 0,
+        'nb_sonnettes': 0,
+        'cities': {}
     }
+
+    for territory in territories:
+        city = territory.city or 'Unknown'
+        
+        # Initialize city stats if not exists
+        if city not in stats['cities']:
+            stats['cities'][city] = {
+                'nb_territoires': 0,
+                'nb_maisons': 0,
+                'nb_appartements': 0,
+                'nb_sonnettes': 0
+            }
+        
+        # Increment territory count for the city
+        stats['cities'][city]['nb_territoires'] += 1
+        
+        # Get building counts if they exist
+        buildings = getattr(territory, 'buildings', 0) or 0
+        apartments = getattr(territory, 'apartments', 0) or 0
+        
+        # Calculate total doorbells (sonnettes)
+        sonnettes = buildings + apartments
+        
+        # Update city stats
+        stats['cities'][city]['nb_maisons'] += buildings
+        stats['cities'][city]['nb_appartements'] += apartments
+        stats['cities'][city]['nb_sonnettes'] += sonnettes
+        
+        # Update global stats
+        stats['nb_maisons'] += buildings
+        stats['nb_appartements'] += apartments
+        stats['nb_sonnettes'] += sonnettes
+
+    return stats
 
 @app.route('/statistics')
 @login_required
 def statistics():
     """Affiche les statistiques globales et par ville"""
-    # Récupérer toutes les villes
-    cities = db.session.query(Territory.city).distinct().order_by(Territory.city).all()
-    cities = [city[0] for city in cities]
-    
-    # Statistiques globales
-    all_territories = Territory.query.all()
-    global_stats = calculate_stats(all_territories)
-    
-    # Statistiques par ville
-    city_stats = {}
-    for city in cities:
-        territories = Territory.query.filter_by(city=city).all()
-        stats = calculate_stats(territories)
-        city_stats[city] = stats
-    
-    return render_template(
-        'statistics.html',
-        global_stats=global_stats,
-        city_stats=city_stats
-    )
+    try:
+        # Récupérer tous les territoires de l'utilisateur connecté
+        all_territories = Territory.query.filter_by(user_id=current_user.id).all()
+        
+        # Calculer les statistiques globales
+        global_stats = calculate_stats(all_territories)
+        
+        # Statistiques par ville
+        city_stats = {}
+        cities = db.session.query(Territory.city).filter_by(user_id=current_user.id).distinct().order_by(Territory.city).all()
+        
+        for city_tuple in cities:
+            city = city_tuple[0]
+            if city:  # Ignorer les villes None ou vides
+                territories = Territory.query.filter_by(user_id=current_user.id, city=city).all()
+                city_stats[city] = calculate_stats(territories)['cities'][city]
+        
+        return render_template(
+            'statistics.html',
+            global_stats=global_stats,
+            city_stats=city_stats
+        )
+    except Exception as e:
+        app.logger.error(f"Erreur lors du calcul des statistiques: {str(e)}")
+        app.logger.error(traceback.format_exc())
+        flash("Une erreur est survenue lors du calcul des statistiques.", "error")
+        return redirect(url_for('index'))
 
 @app.route('/list_territories')
 @login_required
@@ -764,6 +850,12 @@ def list_territories():
     return jsonify({
         'territories': [t.to_dict() for t in territories]
     })
+
+@app.route('/cities')
+@login_required
+def cities():
+    """Affiche la page des villes"""
+    return render_template('cities.html', title='Liste des Villes')
 
 @app.route('/')
 @login_required
@@ -780,7 +872,297 @@ def index():
                          default_center=default_center,
                          google_maps_api_key=os.getenv('GOOGLE_MAPS_API_KEY'))
 
+@app.route('/check_db')
+def check_db():
+    try:
+        # Check database connection
+        db.session.execute('SELECT 1')
+        db_status = "Database connection OK"
+    except Exception as e:
+        db_status = f"Database error: {str(e)}"
+    
+    try:
+        # Count users
+        user_count = User.query.count()
+        users = User.query.all()
+        users_info = [{"email": user.email, "is_active": user.is_active} for user in users]
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "db_status": db_status,
+            "error": f"Error querying users: {str(e)}"
+        })
+    
+    return jsonify({
+        "status": "success",
+        "db_status": db_status,
+        "user_count": user_count,
+        "users": users_info
+    })
+
+def recalculate_territory_stats(territory):
+    """Recalcule les statistiques pour un territoire donné"""
+    try:
+        # Compter les bâtiments
+        building_stats = count_buildings_and_apartments(territory.coordinates)
+        
+        # Mettre à jour les statistiques
+        territory.sonnettes = building_stats['total_doorbells']
+        
+        return True
+    except Exception as e:
+        app.logger.error(f"Erreur lors du recalcul des statistiques pour {territory.name}: {str(e)}")
+        return False
+
+@app.route('/territory/<uuid>/recalculate', methods=['POST'])
+@login_required
+def recalculate_territory(uuid):
+    """Recalcule les statistiques pour un territoire spécifique"""
+    try:
+        territory = Territory.query.filter_by(uuid=uuid).first_or_404()
+        
+        # Vérifier que l'utilisateur est autorisé
+        if territory.user_id != current_user.id:
+            flash('Vous n\'êtes pas autorisé à modifier ce territoire.', 'danger')
+            return redirect(url_for('view_territory', uuid=uuid))
+        
+        if recalculate_territory_stats(territory):
+            db.session.commit()
+            flash('Statistiques recalculées avec succès.', 'success')
+        else:
+            flash('Erreur lors du recalcul des statistiques.', 'danger')
+            
+        return redirect(url_for('view_territory', uuid=uuid))
+        
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Une erreur est survenue : {str(e)}', 'danger')
+        return redirect(url_for('view_territory', uuid=uuid))
+
+@app.route('/territories/recalculate_all', methods=['POST'])
+@login_required
+def recalculate_all_territories():
+    """Recalcule les statistiques pour tous les territoires de l'utilisateur"""
+    try:
+        territories = Territory.query.filter_by(user_id=current_user.id).all()
+        success_count = 0
+        error_count = 0
+        
+        for territory in territories:
+            if recalculate_territory_stats(territory):
+                success_count += 1
+            else:
+                error_count += 1
+        
+        if success_count > 0:
+            db.session.commit()
+            
+        if error_count == 0:
+            flash(f'Statistiques recalculées avec succès pour {success_count} territoires.', 'success')
+        else:
+            flash(f'Statistiques recalculées pour {success_count} territoires. Erreurs sur {error_count} territoires.', 'warning')
+            
+        return redirect(url_for('list_territories'))
+        
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Une erreur est survenue : {str(e)}', 'danger')
+        return redirect(url_for('list_territories'))
+
+def get_streets_in_territory(coordinates):
+    """Récupère les noms des rues dans un territoire"""
+    try:
+        app.logger.info("Début de la récupération des rues")
+        app.logger.info(f"Coordonnées reçues : {coordinates}")
+        
+        # Préparer les coordonnées pour la requête Overpass
+        polygon_coords = []
+        for coord in coordinates:
+            if isinstance(coord, dict):
+                polygon_coords.append(f"{coord['lat']} {coord['lng']}")
+            else:
+                polygon_coords.append(f"{coord[1]} {coord[0]}")
+        
+        # Créer une requête Overpass qui utilise le polygone exact
+        polygon_str = " ".join(polygon_coords)
+        query = f"""
+        [out:json][timeout:60];
+        (
+          way(poly:"{polygon_str}")[highway][name];
+        );
+        out body;
+        >;
+        out skel qt;
+        """
+        
+        app.logger.info(f"Requête Overpass : {query}")
+
+        # Faire la requête à l'API Overpass
+        response = requests.post("https://overpass-api.de/api/interpreter", 
+                               data=query, 
+                               timeout=30,
+                               headers={'User-Agent': 'Territory-Divider/1.0'})
+        
+        app.logger.info(f"Statut de la réponse : {response.status_code}")
+        app.logger.info(f"Contenu de la réponse : {response.text[:500]}")
+
+        if response.status_code != 200:
+            app.logger.error(f"Erreur Overpass : {response.text}")
+            return []
+        
+        try:
+            data = response.json()
+        except Exception as e:
+            app.logger.error(f"Erreur lors du parsing JSON : {str(e)}")
+            app.logger.error(f"Réponse reçue : {response.text[:500]}")
+            return []
+
+        # Extraire les informations des rues
+        streets_info = {}
+        nodes = {node['id']: (node['lat'], node['lon']) for node in data.get('elements', []) if node['type'] == 'node'}
+        
+        for element in data.get('elements', []):
+            if element.get('type') == 'way' and element.get('tags', {}).get('name'):
+                name = element['tags']['name']
+                nodes_list = element.get('nodes', [])
+                
+                if len(nodes_list) >= 2:
+                    # Calculer le côté de la rue par rapport au polygone
+                    start_node = nodes[nodes_list[0]]
+                    end_node = nodes[nodes_list[-1]]
+                    
+                    # Vérifier si les points sont à gauche ou à droite du polygone
+                    is_left_side = True
+                    for node_id in nodes_list:
+                        node = nodes[node_id]
+                        point = (node[1], node[0])  # (lon, lat)
+                        if point_in_polygon(point, coordinates):
+                            is_left_side = False
+                            break
+                    
+                    # Déterminer côté pair/impair
+                    side = "côté pair" if is_left_side else "côté impair"
+                    
+                    if name in streets_info:
+                        if side not in streets_info[name]:
+                            streets_info[name].append(side)
+                    else:
+                        streets_info[name] = [side]
+
+        # Formater les résultats
+        formatted_streets = []
+        for name, sides in sorted(streets_info.items()):
+            sides_str = " et ".join(sides)
+            formatted_streets.append(f"{name} ({sides_str})")
+
+        app.logger.info(f"Rues trouvées : {formatted_streets}")
+        return formatted_streets
+
+    except Exception as e:
+        app.logger.error(f"Erreur lors de la récupération des rues : {str(e)}")
+        app.logger.exception(e)
+        return []
+
+def point_in_polygon(point, polygon):
+    """Vérifie si un point est à l'intérieur d'un polygone"""
+    x, y = point
+    n = len(polygon)
+    inside = False
+    
+    p1x, p1y = polygon[0][0], polygon[0][1]
+    for i in range(n + 1):
+        p2x, p2y = polygon[i % n][0], polygon[i % n][1]
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xinters:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    
+    return inside
+
+@app.route('/territory/<uuid>/streets')
+@login_required
+def get_territory_streets(uuid):
+    """Route pour obtenir les rues d'un territoire"""
+    try:
+        app.logger.info(f"Demande de rues pour le territoire {uuid}")
+        territory = Territory.query.filter_by(uuid=uuid).first_or_404()
+        
+        # Vérifier que l'utilisateur est autorisé
+        if territory.user_id != current_user.id:
+            app.logger.warning(f"Accès non autorisé au territoire {uuid}")
+            return jsonify({'error': 'Non autorisé'}), 403
+        
+        app.logger.info(f"Récupération des rues pour le territoire {territory.name}")
+        streets = get_streets_in_territory(territory.coordinates)
+        
+        response_data = {'streets': streets}
+        app.logger.info(f"Rues trouvées : {streets}")
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        app.logger.error(f"Erreur lors de la récupération des rues : {str(e)}")
+        app.logger.exception(e)
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/static/qrcodes/<path:filename>')
+def serve_qr(filename):
+    return send_from_directory(app.config['QR_FOLDER'], filename)
+
+@app.route('/territories/<uuid>/print_card')
+@login_required
+def print_territory_card(uuid):
+    territory = Territory.query.filter_by(uuid=uuid, user=current_user).first_or_404()
+    
+    # Récupérer le QR code
+    qr_code_url = url_for('serve_qr', filename=f"{territory.uuid}.png")
+    
+    # Traitement des coordonnées
+    try:
+        # Si les coordonnées sont une chaîne JSON, les parser
+        if isinstance(territory.coordinates, str):
+            coordinates = json.loads(territory.coordinates)
+        else:
+            coordinates = territory.coordinates
+
+        # S'assurer que les coordonnées sont dans le bon format (lat, lng)
+        formatted_coordinates = []
+        for coord in coordinates:
+            if len(coord) == 2:
+                # Inverser lat et lng si nécessaire
+                formatted_coordinates.append([float(coord[0]), float(coord[1])])
+        
+        app.logger.info(f"Formatted coordinates for territory {territory.name}: {formatted_coordinates}")
+        
+        if not formatted_coordinates:
+            app.logger.error(f"No valid coordinates found for territory {territory.name}")
+            formatted_coordinates = []
+            
+    except Exception as e:
+        app.logger.error(f"Error processing coordinates for territory {territory.name}: {str(e)}")
+        formatted_coordinates = []
+    
+    return render_template('print_territory_card.html',
+                         territory=territory,
+                         territory_json=formatted_coordinates,
+                         qr_code_url=qr_code_url,
+                         google_maps_api_key=os.getenv('GOOGLE_MAPS_API_KEY'))
+
 if __name__ == '__main__':
     import logging
-    logging.basicConfig(level=logging.INFO)
+    # Configuration du logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    # Définir le niveau de log pour notre application
+    app.logger.setLevel(logging.INFO)
+    # Définir le niveau de log pour Werkzeug
+    logging.getLogger('werkzeug').setLevel(logging.INFO)
+    
     app.run(port=5001, debug=True)

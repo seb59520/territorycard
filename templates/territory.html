@@ -5,145 +5,216 @@
 {% block extra_css %}
 <style>
     #map {
-        height: 600px;
+        height: 400px;
         width: 100%;
         margin-bottom: 20px;
     }
-    .territory-info {
-        margin-bottom: 20px;
-    }
-    .drawing-controls {
-        margin-bottom: 10px;
-    }
+    
     .qr-code {
-        max-width: 150px;
+        max-width: 200px;
         height: auto;
+    }
+    
+    .territory-stats {
+        margin: 20px 0;
+    }
+    
+    .territory-actions {
+        margin: 20px 0;
+    }
+    
+    @media print {
+        .no-print {
+            display: none !important;
+        }
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="container">
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>{{ territory.name }}</h2>
+        <div class="no-print">
+            <a href="{{ url_for('territory_card', uuid=territory.uuid) }}" class="btn btn-secondary me-2" target="_blank">
+                <i class="fas fa-id-card"></i> Format Carte
+            </a>
+            <button class="btn btn-primary" onclick="window.print()">
+                <i class="fas fa-print"></i> Imprimer
+            </button>
+        </div>
+    </div>
+
     <div class="row">
         <div class="col-md-8">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h2>{{ territory.name }}</h2>
-                <button type="button" class="btn btn-danger" data-bs-toggle="modal" data-bs-target="#deleteModal">
-                    <i class="fas fa-trash"></i> Supprimer
-                </button>
-            </div>
             <div id="map"></div>
-        </div>
-        <div class="col-md-4">
-            <div class="card territory-info">
-                <div class="card-body">
-                    <h5 class="card-title">Informations</h5>
-                    <ul class="list-group list-group-flush">
-                        <li class="list-group-item">
-                            <strong>Ville :</strong> {{ territory.city }}
-                        </li>
-                        <li class="list-group-item">
-                            <strong>Maisons :</strong> 
-                            {{ territory.building_stats.get('houses', 0) }}
-                        </li>
-                        <li class="list-group-item">
-                            <strong>Appartements :</strong> 
-                            {{ territory.building_stats.get('apartments', 0) }}
-                            {% if territory.building_stats.get('apartment_buildings', 0) > 0 %}
-                            <br><small class="text-muted">(dans {{ territory.building_stats.get('apartment_buildings', 0) }} immeubles)</small>
-                            {% endif %}
-                        </li>
-                        <li class="list-group-item">
-                            <strong>Sonnettes :</strong> 
-                            {{ territory.building_stats.get('total_doorbells', 0) }}
-                        </li>
-                        {% if territory.building_stats.get('large_buildings', []) %}
-                        <li class="list-group-item">
-                            <strong>Grands immeubles :</strong>
-                            <ul class="list-unstyled mt-2">
-                                {% for building in territory.building_stats.get('large_buildings', []) %}
-                                <li>
-                                    {{ building.address }} 
-                                    <br><small class="text-muted">{{ building.doorbells }} sonnettes</small>
-                                </li>
-                                {% endfor %}
-                            </ul>
-                        </li>
+            <div class="territory-stats mb-4">
+                <div class="row">
+                    <div class="col-12">
+                        <p class="text-muted mb-0">À titre indicatif : {{ territory.sonnettes if territory.sonnettes is not none else 0 }} sonnettes</p>
+                        {% if territory.commentaire %}
+                        <p class="mt-2"><strong>Note :</strong> {{ territory.commentaire }}</p>
                         {% endif %}
-                    </ul>
-                    <div class="mt-3 text-center">
-                        <img src="{{ url_for('static', filename='qrcodes/' + territory.uuid + '.png') }}" 
-                             class="qr-code" alt="QR Code">
                     </div>
                 </div>
+            </div>
+            <div class="streets-list mb-4">
+                <h5>Rues concernées :</h5>
+                <ul id="streetsList" class="list-unstyled">
+                </ul>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="text-center">
+                <img src="{{ url_for('static', filename='qrcodes/' + territory.uuid + '.png') }}" 
+                     alt="QR Code" class="qr-code img-fluid">
+            </div>
+            <div class="territory-actions no-print mt-4">
+                <a href="{{ url_for('analyze_territory', uuid=territory.uuid) }}" class="btn btn-info w-100 mb-2">
+                    <i class="fas fa-chart-bar"></i> Analyse détaillée
+                </a>
+                <form action="{{ url_for('recalculate_territory', uuid=territory.uuid) }}" method="POST" class="mb-2">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="fas fa-sync"></i> Recalculer les statistiques
+                    </button>
+                </form>
+                <button type="button" class="btn btn-danger w-100" data-bs-toggle="modal" data-bs-target="#deleteModal">
+                    <i class="fas fa-trash"></i> Supprimer
+                </button>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Modal de confirmation de suppression -->
+<!-- Modal de suppression -->
 <div class="modal fade" id="deleteModal" tabindex="-1" aria-labelledby="deleteModalLabel" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="deleteModalLabel">Confirmer la suppression</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <p>Êtes-vous sûr de vouloir supprimer le territoire "{{ territory.name }}" ?</p>
-                <p class="text-danger">Cette action est irréversible.</p>
+                Êtes-vous sûr de vouloir supprimer le territoire "{{ territory.name }}" ?
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
-                <form action="{{ url_for('delete_territory', uuid=territory.uuid) }}" method="POST" style="display: inline;">
-                    <button type="submit" class="btn btn-danger">
-                        <i class="fas fa-trash"></i> Supprimer définitivement
-                    </button>
-                </form>
+                <button type="button" class="btn btn-danger" onclick="deleteTerritory()">Supprimer</button>
             </div>
         </div>
     </div>
 </div>
 
+{% endblock %}
+
 {% block extra_js %}
 <script>
 let map;
-let drawingManager;
-let shapes = [];
+
+// Charger l'API Google Maps
+document.addEventListener('DOMContentLoaded', function() {
+    var script = document.createElement('script');
+    script.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyB-v8aL4nH79zGM2yp2YuQhZImEPTT_pj0&callback=initMap';
+    script.async = true;
+    script.defer = true;
+    document.body.appendChild(script);
+});
 
 function initMap() {
-    const territory = {{ territory.polygon_data | tojson | safe }};
+    console.log('Initializing map...');
+    const coordinates = JSON.parse('{{ territory.coordinates|tojson|safe }}');
+    console.log('Territory coordinates:', coordinates);
     
-    // Calculer le centre approximatif du polygone
-    const coordinates = territory.geometry.coordinates[0];
-    let lat = 0, lng = 0;
-    coordinates.forEach(coord => {
-        lat += coord[1];
-        lng += coord[0];
-    });
-    lat /= coordinates.length;
-    lng /= coordinates.length;
+    try {
+        const bounds = new google.maps.LatLngBounds();
+        
+        // Créer la carte
+        map = new google.maps.Map(document.getElementById('map'), {
+            zoom: 17,
+            mapTypeId: 'roadmap',
+            streetViewControl: false
+        });
+        
+        // Créer le polygone
+        const polygon = new google.maps.Polygon({
+            paths: coordinates.map(coord => ({ lat: coord[1], lng: coord[0] })),
+            strokeColor: '#FF0000',
+            strokeOpacity: 0.8,
+            strokeWeight: 2,
+            fillColor: '#FF0000',
+            fillOpacity: 0.35
+        });
+        
+        // Ajouter le polygone à la carte
+        polygon.setMap(map);
+        
+        // Ajuster les limites de la carte
+        coordinates.forEach(coord => {
+            bounds.extend(new google.maps.LatLng(coord[1], coord[0]));
+        });
+        map.fitBounds(bounds);
+        
+        console.log('Map initialized successfully');
+        
+        // Charger les rues une fois que la carte est initialisée
+        loadStreets();
+    } catch (error) {
+        console.error('Error initializing map:', error);
+    }
+}
+
+function loadStreets() {
+    console.log('Loading streets...');
+    const streetsList = document.getElementById('streetsList');
+    const territoryUuid = {{ territory.uuid|tojson|safe }};
     
-    map = new google.maps.Map(document.getElementById('map'), {
-        zoom: 16,
-        center: { lat: lat, lng: lng },
-        mapTypeId: 'satellite'
-    });
-    
-    // Créer le polygone du territoire
-    const territoryPolygon = new google.maps.Polygon({
-        paths: coordinates.map(coord => ({ lat: coord[1], lng: coord[0] })),
-        strokeColor: '#FF0000',
-        strokeOpacity: 0.8,
-        strokeWeight: 2,
-        fillColor: '#FF0000',
-        fillOpacity: 0.35
-    });
-    
-    territoryPolygon.setMap(map);
+    fetch(`/territory/${territoryUuid}/streets`)
+        .then(response => {
+            console.log('Streets response:', response);
+            return response.json();
+        })
+        .then(data => {
+            console.log('Streets data:', data);
+            streetsList.innerHTML = '';
+            if (data.streets && data.streets.length > 0) {
+                data.streets.forEach(street => {
+                    const li = document.createElement('li');
+                    li.textContent = street;
+                    streetsList.appendChild(li);
+                });
+            } else {
+                const li = document.createElement('li');
+                li.innerHTML = '<small class="text-muted">Aucune rue trouvée</small>';
+                streetsList.appendChild(li);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading streets:', error);
+            streetsList.innerHTML = '<li><small class="text-danger">Erreur lors du chargement des rues</small></li>';
+        });
+}
+
+function deleteTerritory() {
+    const territoryUuid = {{ territory.uuid|tojson|safe }};
+    if (confirm('Êtes-vous sûr de vouloir supprimer ce territoire ?')) {
+        fetch(`/territory/${territoryUuid}/delete`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (response.ok) {
+                window.location.href = {{ url_for('index')|tojson|safe }};
+            } else {
+                alert('Erreur lors de la suppression du territoire');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Erreur lors de la suppression du territoire');
+        });
+    }
 }
 </script>
-<script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&callback=initMap" async defer></script>
-{% endblock %}
-
 {% endblock %}

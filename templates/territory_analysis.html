@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Analyse du territoire {{ territory.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    #map {
+        height: 400px;
+        width: 100%;
+        margin-bottom: 20px;
+    }
+    
+    .stats-card {
+        margin-bottom: 20px;
+    }
+    
+    .building-type {
+        margin: 5px 0;
+        padding: 5px;
+        border-radius: 4px;
+        background-color: #f8f9fa;
+    }
+    
+    .building-count {
+        font-weight: bold;
+        color: #0d6efd;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Analyse du territoire {{ territory.name }}</h2>
+        <div>
+            <a href="{{ url_for('view_territory', uuid=territory.uuid) }}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left"></i> Retour
+            </a>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-8">
+            <div id="map"></div>
+        </div>
+        <div class="col-md-4">
+            <div class="card stats-card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Statistiques détaillées</h5>
+                </div>
+                <div class="card-body">
+                    <h6>Bâtiments résidentiels</h6>
+                    <ul class="list-group list-group-flush mb-3">
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Maisons individuelles
+                            <span class="badge bg-primary rounded-pill">{{ stats.buildings.houses }}</span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Immeubles
+                            <span class="badge bg-primary rounded-pill">{{ stats.buildings.apartment_buildings }}</span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Appartements
+                            <span class="badge bg-primary rounded-pill">{{ stats.buildings.apartments }}</span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Total sonnettes
+                            <span class="badge bg-success rounded-pill">{{ stats.buildings.total_doorbells }}</span>
+                        </li>
+                    </ul>
+
+                    <h6>Types de bâtiments</h6>
+                    <div class="mb-3">
+                        {% for type, count in stats.building_types.items() %}
+                        <div class="building-type">
+                            <span class="building-name">{{ type }}</span>
+                            <span class="building-count float-end">{{ count }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    {% if stats.large_buildings %}
+                    <h6>Grands bâtiments</h6>
+                    <ul class="list-group list-group-flush">
+                        {% for building in stats.large_buildings %}
+                        <li class="list-group-item">
+                            <div><strong>Type:</strong> {{ building.type }}</div>
+                            <div><strong>Étages:</strong> {{ building.levels }}</div>
+                            {% if building.name != 'unknown' %}
+                            <div><strong>Nom:</strong> {{ building.name }}</div>
+                            {% endif %}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function initializeMap() {
+    try {
+        var mapElement = document.getElementById('map');
+        if (!mapElement) {
+            console.error('Map element not found');
+            return;
+        }
+
+        var coordinates = {{ territory.coordinates|tojson }};
+        if (!coordinates || !Array.isArray(coordinates) || coordinates.length === 0) {
+            console.error('Invalid coordinates data');
+            return;
+        }
+
+        // Convertir les coordonnées du format [lng, lat] en {lat: lat, lng: lng}
+        var validCoordinates = coordinates.map(function(coord) {
+            if (typeof coord === 'object' && 'lat' in coord && 'lng' in coord) {
+                return {
+                    lat: parseFloat(coord.lat),
+                    lng: parseFloat(coord.lng)
+                };
+            }
+            else if (Array.isArray(coord) && coord.length >= 2) {
+                return {
+                    lat: parseFloat(coord[1]),
+                    lng: parseFloat(coord[0])
+                };
+            }
+            return null;
+        }).filter(coord => coord !== null);
+
+        if (validCoordinates.length === 0) {
+            console.error('No valid coordinates found');
+            mapElement.innerHTML = '<div class="alert alert-warning">Impossible d\'afficher la carte : coordonnées invalides</div>';
+            return;
+        }
+
+        // Calculer le centre du polygone
+        var centerLat = validCoordinates.reduce((sum, coord) => sum + coord.lat, 0) / validCoordinates.length;
+        var centerLng = validCoordinates.reduce((sum, coord) => sum + coord.lng, 0) / validCoordinates.length;
+        
+        var map = new google.maps.Map(mapElement, {
+            zoom: 16,
+            center: { lat: centerLat, lng: centerLng },
+            mapTypeId: 'satellite'
+        });
+
+        var bounds = new google.maps.LatLngBounds();
+        
+        var polygon = new google.maps.Polygon({
+            paths: validCoordinates,
+            strokeColor: '#FF0000',
+            strokeOpacity: 0.8,
+            strokeWeight: 2,
+            fillColor: '#FF0000',
+            fillOpacity: 0.35
+        });
+
+        polygon.setMap(map);
+
+        validCoordinates.forEach(function(coord) {
+            bounds.extend(new google.maps.LatLng(coord.lat, coord.lng));
+        });
+
+        map.fitBounds(bounds);
+    } catch (error) {
+        console.error('Error initializing map:', error);
+        var mapElement = document.getElementById('map');
+        if (mapElement) {
+            mapElement.innerHTML = '<div class="alert alert-warning">Erreur lors du chargement de la carte</div>';
+        }
+    }
+}
+
+// S'assurer que la fonction est disponible globalement
+window.initMap = initializeMap;
+
+// Charger l'API Google Maps
+document.addEventListener('DOMContentLoaded', function() {
+    var script = document.createElement('script');
+    script.src = 'https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&callback=initMap';
+    script.async = true;
+    script.defer = true;
+    document.body.appendChild(script);
+});
+</script>
+{% endblock %}

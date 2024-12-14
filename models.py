@@ -25,33 +25,37 @@ class User(UserMixin, db.Model):
 
 class Territory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    uuid = db.Column(db.String(36), unique=True, nullable=False)
+    uuid = db.Column(db.String(36), unique=True, nullable=False)  # UUID pour identifier de manière unique le territoire
     name = db.Column(db.String(100), nullable=False)
+    type = db.Column(db.String(50))
+    number = db.Column(db.String(10))
     city = db.Column(db.String(100))
-    polygon_data = db.Column(db.JSON, nullable=False)
-    building_stats = db.Column(db.JSON)
+    coordinates = db.Column(db.JSON)
+    buildings = db.Column(db.Integer, default=0)
+    apartments = db.Column(db.Integer, default=0)
+    sonnettes = db.Column(db.Integer, default=0)  # Ajout de la colonne sonnettes
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_updated = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    commentaire = db.Column(db.Text, nullable=True)  # Ajout du champ commentaire
     
     # Relations
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     
     def to_dict(self):
         return {
             'id': self.id,
             'uuid': self.uuid,
             'name': self.name,
+            'type': self.type,
+            'number': self.number,
             'city': self.city,
-            'polygon_data': self.polygon_data,
-            'building_stats': self.building_stats or {
-                'houses': 0,
-                'apartments': 0,
-                'apartment_buildings': 0,
-                'total_doorbells': 0,
-                'large_buildings': []
-            },
+            'coordinates': self.coordinates,
+            'buildings': self.buildings,
+            'apartments': self.apartments,
+            'sonnettes': self.sonnettes,
+            'commentaire': self.commentaire,  # Ajout du commentaire dans le dictionnaire
             'created_at': self.created_at.isoformat(),
-            'last_updated': self.last_updated.isoformat()
+            'updated_at': self.updated_at.isoformat()
         }
 
 class UserSettings(db.Model):
